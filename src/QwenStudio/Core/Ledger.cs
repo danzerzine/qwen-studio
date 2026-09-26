@@ -192,7 +192,8 @@ namespace QwenStudio.Core
 
         IEnumerable<MinuteStat> Minutes => recent.Concat(open.Values);
 
-        public static string ModeOf(MinuteStat m) => (m.Profile ?? "?") + (m.Old ? "|old" : "");
+        /// <summary>Toggles are not modes: minutes of the former «Без размышлений» and «Зрение» cards count as «Чат».</summary>
+        public static string ModeOf(MinuteStat m) => (Profile.BaseId(m.Profile) ?? "?") + (m.Old ? "|old" : "");
 
         void Fold(MinuteStat m)
         {

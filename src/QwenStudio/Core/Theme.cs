@@ -13,22 +13,22 @@ namespace QwenStudio.Core
     {
         static readonly Dictionary<string, string> dark = new()
         {
-            ["Bg"] = "#0E1014", ["Surface"] = "#161920", ["Surface2"] = "#1D2029", ["Hover"] = "#252935", ["Line"] = "#272B36",
-            ["Text"] = "#E7E9EF", ["Muted"] = "#8A92A6", ["Faint"] = "#5C6376",
-            ["Accent"] = "#7B8CFF", ["AccentHover"] = "#909EFF", ["AccentSoft"] = "#1F2440", ["OnAccent"] = "#0E1014",
-            ["Good"] = "#3DD68C", ["Warn"] = "#F5B94A", ["Bad"] = "#FF6B6B", ["BadSoft"] = "#3A1E24",
-            ["Series1"] = "#7B8CFF", ["Series2"] = "#4CC9D9", ["Series3"] = "#C084FC", ["Series4"] = "#F08BB4", ["Series5"] = "#8A92A6",
-            ["LogText"] = "#AEB4C2", ["ThumbBrush"] = "#3A3F4D",
+            ["Bg"] = "#222222", ["Surface"] = "#2B2B2B", ["Surface2"] = "#343434", ["Hover"] = "#3D3D3D", ["Line"] = "#3A3A3A",
+            ["Text"] = "#E9E9E9", ["Muted"] = "#A8A8A8", ["Faint"] = "#7D7D7D",
+            ["Accent"] = "#4CC2FF", ["AccentHover"] = "#7AD2FF", ["AccentSoft"] = "#22435A", ["OnAccent"] = "#0A1620",
+            ["Good"] = "#3DD68C", ["Warn"] = "#F5B94A", ["Bad"] = "#FF6B6B", ["BadSoft"] = "#4F2D2F",
+            ["Series1"] = "#4CC2FF", ["Series2"] = "#F89DC9", ["Series3"] = "#52D7C1", ["Series4"] = "#EBB25F", ["Series5"] = "#A8A8A8",
+            ["LogText"] = "#C1C1C1", ["ThumbBrush"] = "#525252",
         };
 
         static readonly Dictionary<string, string> light = new()
         {
-            ["Bg"] = "#F3F4F7", ["Surface"] = "#FFFFFF", ["Surface2"] = "#EEF0F4", ["Hover"] = "#E3E6ED", ["Line"] = "#DCE0E7",
-            ["Text"] = "#1A1D24", ["Muted"] = "#5E6677", ["Faint"] = "#98A0AF",
-            ["Accent"] = "#4D5DE3", ["AccentHover"] = "#6270EC", ["AccentSoft"] = "#E7EAFF", ["OnAccent"] = "#FFFFFF",
+            ["Bg"] = "#F3F3F3", ["Surface"] = "#FFFFFF", ["Surface2"] = "#EEEEEE", ["Hover"] = "#E3E3E3", ["Line"] = "#DEDEDE",
+            ["Text"] = "#1C1C1C", ["Muted"] = "#5D5D5D", ["Faint"] = "#9E9E9E",
+            ["Accent"] = "#005FB8", ["AccentHover"] = "#1A6FC4", ["AccentSoft"] = "#E1EEFA", ["OnAccent"] = "#FFFFFF",
             ["Good"] = "#17935A", ["Warn"] = "#8F5B00", ["Bad"] = "#DC3F45", ["BadSoft"] = "#FDE8E9",
-            ["Series1"] = "#4D5DE3", ["Series2"] = "#0E8FA3", ["Series3"] = "#8B4FD6", ["Series4"] = "#C94F86", ["Series5"] = "#98A0AF",
-            ["LogText"] = "#3A4150", ["ThumbBrush"] = "#C3C8D2",
+            ["Series1"] = "#005FB8", ["Series2"] = "#A14E78", ["Series3"] = "#008471", ["Series4"] = "#976200", ["Series5"] = "#9E9E9E",
+            ["LogText"] = "#3D3D3D", ["ThumbBrush"] = "#C4C4C4",
         };
 
         public static ThemeMode Mode { get; private set; } = ThemeMode.System;

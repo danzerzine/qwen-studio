@@ -102,36 +102,48 @@
                         </UniformGrid>
                     </Border>
                     <TextBlock Text="РЕЖИМ" Style="{StaticResource Caption}"/>
-                    <StackPanel x:Name="ProfilesPanel"/>
-
-                    <!-- actions: one Primary (start / switch), stop is an outline and never the loudest thing -->
-                    <Button x:Name="BtnPrimary" Style="{StaticResource Primary}" Height="{StaticResource HAction}" Margin="{StaticResource GapTopS}" Click="Primary_Click">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock x:Name="BtnPrimaryIcon" Style="{StaticResource Icon}" FontSize="{StaticResource IconS}" Text="&#xE768;" Foreground="{DynamicResource OnAccent}"/>
-                            <TextBlock x:Name="BtnPrimaryText" Text="Запустить" Margin="{StaticResource GapLeftS}" Foreground="{DynamicResource OnAccent}" TextTrimming="CharacterEllipsis"/>
-                        </StackPanel>
-                    </Button>
-                    <Grid x:Name="SecondaryActions" Margin="{StaticResource GapTopS}">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition x:Name="RestartCol"/>
-                            <ColumnDefinition x:Name="ActionGapCol" Width="{StaticResource ColGapS}"/>
-                            <ColumnDefinition/>
-                        </Grid.ColumnDefinitions>
-                        <Button x:Name="BtnRestart" Click="Restart_Click">
-                            <StackPanel Orientation="Horizontal">
-                                <TextBlock Style="{StaticResource Icon}" FontSize="{StaticResource IconS}" Text="&#xE72C;"/>
-                                <TextBlock Text="Перезапустить" Margin="{StaticResource GapLeftS}"/>
-                            </StackPanel>
-                        </Button>
-                        <Button x:Name="BtnStop" Grid.Column="2" Style="{StaticResource DangerOutline}" Click="Stop_Click">
-                            <StackPanel Orientation="Horizontal">
-                                <TextBlock Style="{StaticResource Icon}" FontSize="{StaticResource IconS}" Text="&#xE71A;" Foreground="{DynamicResource Bad}"/>
-                                <TextBlock Text="Остановить" Margin="{StaticResource GapLeftS}" Foreground="{DynamicResource Bad}"/>
-                            </StackPanel>
-                        </Button>
-                    </Grid>
-                    <TextBlock x:Name="ActionHint" Style="{StaticResource Hint}" Margin="{StaticResource GapTopS}" Visibility="Collapsed"/>
                 </StackPanel>
+
+                <!-- modes scroll when they do not fit; the actions stay right under the list -->
+                <DockPanel VerticalAlignment="Top">
+                    <StackPanel DockPanel.Dock="Bottom">
+                        <!-- options of the selected mode; remembered per mode, disabled where the mode or the model cannot do it -->
+                        <CheckBox x:Name="VisionToggle" Content="Зрение" Margin="{StaticResource GapTopS}" ToolTipService.ShowOnDisabled="True"
+                                  Checked="Option_Changed" Unchecked="Option_Changed"/>
+                        <CheckBox x:Name="ThinkToggle" Content="Размышления" Margin="{StaticResource GapTopS}" ToolTipService.ShowOnDisabled="True"
+                                  Checked="Option_Changed" Unchecked="Option_Changed"/>
+                        <!-- actions: one Primary (start / switch), stop is an outline and never the loudest thing -->
+                        <Button x:Name="BtnPrimary" Style="{StaticResource Primary}" Height="{StaticResource HAction}" Margin="{StaticResource GapTopS}" Click="Primary_Click">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock x:Name="BtnPrimaryIcon" Style="{StaticResource Icon}" FontSize="{StaticResource IconS}" Text="&#xE768;" Foreground="{DynamicResource OnAccent}"/>
+                                <TextBlock x:Name="BtnPrimaryText" Text="Запустить" Margin="{StaticResource GapLeftS}" Foreground="{DynamicResource OnAccent}" TextTrimming="CharacterEllipsis"/>
+                            </StackPanel>
+                        </Button>
+                        <Grid x:Name="SecondaryActions" Margin="{StaticResource GapTopS}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition x:Name="RestartCol"/>
+                                <ColumnDefinition x:Name="ActionGapCol" Width="{StaticResource ColGapS}"/>
+                                <ColumnDefinition/>
+                            </Grid.ColumnDefinitions>
+                            <Button x:Name="BtnRestart" Click="Restart_Click">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Style="{StaticResource Icon}" FontSize="{StaticResource IconS}" Text="&#xE72C;"/>
+                                    <TextBlock Text="Перезапустить" Margin="{StaticResource GapLeftS}"/>
+                                </StackPanel>
+                            </Button>
+                            <Button x:Name="BtnStop" Grid.Column="2" Style="{StaticResource DangerOutline}" Click="Stop_Click">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Style="{StaticResource Icon}" FontSize="{StaticResource IconS}" Text="&#xE71A;" Foreground="{DynamicResource Bad}"/>
+                                    <TextBlock Text="Остановить" Margin="{StaticResource GapLeftS}" Foreground="{DynamicResource Bad}"/>
+                                </StackPanel>
+                            </Button>
+                        </Grid>
+                        <TextBlock x:Name="ActionHint" Style="{StaticResource Hint}" Margin="{StaticResource GapTopS}" Visibility="Collapsed"/>
+                    </StackPanel>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                        <StackPanel x:Name="ProfilesPanel"/>
+                    </ScrollViewer>
+                </DockPanel>
             </DockPanel>
 
             <!-- ===================== OVERVIEW ===================== -->

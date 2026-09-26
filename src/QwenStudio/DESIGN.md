@@ -25,6 +25,8 @@ and never for a sentence of text: `Warn` on a light surface is hard to read. A w
 stays `Text` / `LogText` and gets a `Dot` in the state colour; only `Bad` may colour an error line.
 Light `Warn` is a dark amber (#8F5B00, ~6:1 on white) so a short figure in it stays legible.
 
+Palette (26.09): neutrals are untinted graphite, dark theme lifted to charcoal (Bg #222222, Surface #2B2B2B, like Windows 11 dark) rather than near-black; `Accent` is the Windows 11 accent blue (#4CC2FF dark / #005FB8 light) and is the only hue for action and selection. No violet anywhere. Series run blue, rose, teal, amber (Series1 = `Accent`); they mark chart categories, never states. Series3 (Parallel, the busiest mode) is teal because rose at `SeriesAltOpacity` turns mauve on the dark surface. Values live in `Core/Theme.cs`; `App.xaml` repeats the dark set as defaults.
+
 ## Type roles (styles in `App.xaml`)
 
 | Style | Size / weight | Use |

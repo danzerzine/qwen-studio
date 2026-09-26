@@ -94,8 +94,16 @@ namespace QwenStudio.Core
         public string Model { get; set; } = "MODEL_PATH";
         public int Ctx { get; set; }
         public List<string> Args { get; set; } = new();
-        /// <summary>Key in server_config.env with the vision projector (--mmproj); empty for text-only modes.</summary>
+        /// <summary>
+        /// Key in server_config.env with the vision projector (--mmproj). In profiles.json it means "this mode can see";
+        /// a mode without it has the «Зрение» toggle disabled. On a launch variant it is set only when vision is on.
+        /// </summary>
         public string Mmproj { get; set; }
+        /// <summary>Default of the «Зрение» toggle ("vision": true in profiles.json).</summary>
+        [System.Text.Json.Serialization.JsonPropertyName("vision")]
+        public bool VisionByDefault { get; set; }
+        /// <summary>Default of the «Размышления» toggle: the mode's args do not say --reasoning off.</summary>
+        public bool ThinksByDefault { get { int i = Args.IndexOf("--reasoning"); return !(i >= 0 && i + 1 < Args.Count && Args[i + 1] == "off"); } }
 
         public bool Mtp => Args.Contains("draft-mtp");
         /// <summary>First name from --alias: the model id clients send; null when the profile sets none.</summary>
@@ -104,32 +112,92 @@ namespace QwenStudio.Core
 
         /// <summary>True for the variant that runs on the old model (FALLBACK_* paths).</summary>
         public bool Old { get; private set; }
+        /// <summary>Launch variant: the vision projector is loaded.</summary>
+        public bool Sees { get; private set; }
+        /// <summary>Launch variant: reasoning is on.</summary>
+        public bool Thinks { get; private set; } = true;
 
         /// <summary>
-        /// The same mode on the fallback model (FALLBACK_* paths, usually an older build and weights): no MTP head,
-        /// at most 96K context and no prompt cache.
+        /// What Start launches: this mode on the chosen model with the two toggles applied.
+        /// Fallback model (FALLBACK_* paths, usually an older build and weights): no MTP head, at most 96K context and no prompt cache.
+        /// Vision off drops --mmproj; vision with MTP turns the prompt cache off (the way «Зрение» was measured).
+        /// Thinking off replaces the mode's --reasoning* flags with --reasoning off.
         /// </summary>
-        public Profile For(bool old)
+        public Profile Variant(bool old, bool vision, bool think)
         {
-            if (!old || Old) return this;
+            bool sees = vision && !string.IsNullOrEmpty(Mmproj);
             var args = new List<string>();
             for (int i = 0; i < Args.Count; i++)
             {
-                if (Args[i].StartsWith("--spec-")) { i++; continue; }      // flag + value
-                args.Add(Args[i]);
+                var a = Args[i];
+                if (old && a.StartsWith("--spec-")) { i++; continue; }                 // flag + value
+                if (a.StartsWith("--reasoning") && i + 1 < Args.Count)
+                {
+                    if (think) { args.Add(a); args.Add(a == "--reasoning" && Args[i + 1] == "off" ? "on" : Args[i + 1]); }
+                    i++; continue;
+                }
+                args.Add(a);
             }
-            if (!args.Contains("--no-cache-prompt")) args.Add("--no-cache-prompt");
-            int ctx = Math.Min(Ctx, 98304);
-            var badge = string.Join(" · ", (Badge ?? "").Split('·').Select(s => s.Trim()).Where(s => s != "MTP" && s != ""));
-            if (ctx != Ctx) badge = badge.Replace($"{Ctx / 1024}K", $"{ctx / 1024}K");
+            if (!think) args.AddRange(new[] { "--reasoning", "off" });
+            if ((old || sees && args.Contains("draft-mtp")) && !args.Contains("--no-cache-prompt")) args.Add("--no-cache-prompt");
+            int ctx = old ? Math.Min(Ctx, 98304) : Ctx;
+            var parts = (Badge ?? "").Split('·').Select(s => s.Trim())
+                .Where(s => s != "" && s != "картинки" && s != "зрение" && !(old && s == "MTP"))
+                .Select(s => s == $"{Ctx / 1024}K" ? $"{ctx / 1024}K" : s).ToList();
+            if (sees) parts.Add("зрение");
+            if (!think) parts.Add("без размышлений");
             return new Profile
             {
-                Id = Id, Name = Name, Description = Description, Badge = badge,
-                Server = "FALLBACK_SERVER_EXE", Model = "FALLBACK_MODEL_PATH", Mmproj = Mmproj, Ctx = ctx, Args = args, Old = true,
+                Id = Id, Name = Name, Description = Description, Badge = string.Join(" · ", parts),
+                Server = old ? "FALLBACK_SERVER_EXE" : Server, Model = old ? "FALLBACK_MODEL_PATH" : Model,
+                Mmproj = sees ? Mmproj : null, VisionByDefault = VisionByDefault, Ctx = ctx, Args = args,
+                Old = old, Sees = sees, Thinks = think,
             };
         }
 
-        public string Title => Old ? Name + " · запасная модель" : Name;
+        /// <summary>For the running line: the badge next to it already lists vision and thinking.</summary>
+        public string ModelTitle => Name + (Old ? " · запасная модель" : "");
+        public string Title => Name + (Sees ? " · зрение" : "") + (Thinks ? "" : " · без размышлений") + (Old ? " · запасная модель" : "");
+        /// <summary>For the start button: the toggles are right above it.</summary>
+        public string ShortTitle => Name;  // for the start button; the model is on the switch above, the full Title in its tooltip
+
+        /// <summary>"chat|main|vision|nothink": what ran last, for autostart.</summary>
+        public string Key => $"{Id}|{(Old ? "old" : "main")}|{(Sees ? "vision" : "")}|{(Thinks ? "" : "nothink")}";
+
+        /// <summary>Modes that were separate cards before the toggles: id → (mode, vision, thinking).</summary>
+        static readonly Dictionary<string, (string id, bool vision, bool think)> legacy = new()
+        {
+            ["nothink"] = ("chat", false, false),
+            ["vision"] = ("chat", true, true),
+            ["parallel-nothink"] = ("parallel", true, false),
+        };
+
+        /// <summary>The mode an id belongs to now: "nothink" → "chat"; anything else stays as is.</summary>
+        public static string BaseId(string id) => id != null && legacy.TryGetValue(id, out var l) ? l.id : id;
+
+        /// <summary>
+        /// A launch variant by id; toggles not given come from the legacy card the id names, else from the mode's defaults.
+        /// Null when the mode is gone from profiles.json.
+        /// </summary>
+        public static Profile Resolve(IList<Profile> all, string id, bool old, bool? vision = null, bool? think = null)
+        {
+            var p = all.FirstOrDefault(x => x.Id == id);
+            if (p == null && id != null && legacy.TryGetValue(id, out var l))
+            {
+                p = all.FirstOrDefault(x => x.Id == l.id);
+                vision ??= l.vision; think ??= l.think;
+            }
+            return p?.Variant(old, vision ?? p.VisionByDefault, think ?? p.ThinksByDefault);
+        }
+
+        /// <summary>Parses <see cref="Key"/>; also the older "chat|old" form.</summary>
+        public static Profile FromKey(IList<Profile> all, string key)
+        {
+            var k = (key ?? "").Split('|');
+            if (k[0] == "") return null;
+            bool? vision = k.Length > 2 ? k[2] == "vision" : null, think = k.Length > 3 ? k[3] != "nothink" : null;
+            return Resolve(all, k[0], k.Length > 1 && k[1] == "old", vision, think);
+        }
 
         public static List<Profile> LoadAll()
         {

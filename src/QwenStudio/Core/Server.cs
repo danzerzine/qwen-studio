@@ -114,6 +114,9 @@ namespace QwenStudio.Core
             public DateTime Started { get; set; }
             public int Port { get; set; }
             public bool Old { get; set; }
+            /// <summary>Toggles of the running variant; absent in files written before them.</summary>
+            public bool? Vision { get; set; }
+            public bool? Think { get; set; }
         }
 
         public void Emit(string text, LogKind kind = LogKind.Info) =>
@@ -130,7 +133,7 @@ namespace QwenStudio.Core
                 else
                 {
                     Watch(mine);
-                    Profile = profiles.FirstOrDefault(p => p.Id == st.Profile)?.For(st.Old);
+                    Profile = Profile.Resolve(profiles, st.Profile, st.Old, st.Vision, st.Think);
                     LogFile = st.Log; Since = st.Started; Port = st.Port;
                     State = ServerState.Starting;          // the health poll promotes it to Running
                     Attached = true;
@@ -195,7 +198,7 @@ namespace QwenStudio.Core
             Profile = p;
             Since = DateTime.Now;
             State = ServerState.Starting;
-            File.WriteAllText(Paths.State, JsonSerializer.Serialize(new StateFile { Pid = Pid, Profile = p.Id, Log = LogFile, Started = Since, Port = Port, Old = p.Old }));
+            File.WriteAllText(Paths.State, JsonSerializer.Serialize(new StateFile { Pid = Pid, Profile = p.Id, Log = LogFile, Started = Since, Port = Port, Old = p.Old, Vision = p.Sees, Think = p.Thinks }));
             Emit($"▶ {p.Title} ({p.Badge}) · {Path.GetFileName(model)} · {Path.GetFileName(Path.GetDirectoryName(exe))} · PID {Pid}");
             StartTail(fromEnd: false);
         }

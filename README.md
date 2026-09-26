@@ -20,7 +20,7 @@ OpenCode and ComfyUI. [Full English description below.](#in-english)*
 
 **[English version ↓](#in-english)**
 
-<img src="docs/screenshot.png" alt="Qwen Studio: сервер в режиме «Параллельно» на запасной модели, 4 слота заняты, живой график за 5 минут" width="900">
+<img src="docs/screenshot.png" alt="Qwen Studio: режим «Параллельно» со зрением и размышлениями, 4 слота из 4 генерируют 110 т/с, видеокарта загружена на 94%, живой график за 5 минут" width="900">
 
 </div>
 
@@ -29,9 +29,9 @@ Studio вырос вокруг Qwen3.8-27B на видеокарте с 16 ГБ,
 
 ## Возможности
 
-- **Режимы одной кнопкой.** Агент, чат, без размышлений, зрение, параллельные запросы. Режим — это набор
-  аргументов llama-server в `profiles.json`. Переключение перезапускает сервер. Если идёт запрос, Studio
-  сначала спросит.
+- **Режимы одной кнопкой.** Агент, чат и параллельные запросы, а под ними тумблеры «Зрение» и
+  «Размышления». Режим — это набор аргументов llama-server в `profiles.json`. Переключение перезапускает
+  сервер. Если идёт запрос, Studio сначала спросит.
 - **Основная и запасная модель.** Любой режим можно запустить на второй модели: например, на прошлой
   проверенной версии, если новая ведёт себя странно.
 - **Видно, что происходит.** Скорость генерации и промпта, занятые слоты, память, загрузка, питание и
@@ -44,7 +44,8 @@ Studio вырос вокруг Qwen3.8-27B на видеокарте с 16 ГБ,
 - **Обновления.** Studio скачивает свежую CUDA-сборку llama.cpp с GitHub в отдельную папку, а текущая
   остаётся на месте. Open WebUI обновляется через `uv`.
 - **Мелочи.** Автозапуск вместе с Windows (сервер тоже может стартовать сам), архив старых журналов,
-  светлая и тёмная тема. Закрытие окна не останавливает сервер, если вы этого не хотите.
+  светлая и тёмная тема в духе Windows 11 ([скриншот светлой](docs/screenshot-light.png)). Закрытие окна
+  не останавливает сервер, если вы этого не хотите.
 
 Что на вкладках:
 
@@ -90,13 +91,24 @@ logs\studio\           журналы сервера, статистика, на
 Режимы описаны в `profiles.json`. Их можно менять и добавлять: «Настройки → Обслуживание → Профили →
 Изменить», затем «Перечитать».
 
-| Режим | Контекст | Для чего |
-|---|---|---|
-| Агент | 128K | OpenCode и другие агенты: длинный контекст, полные размышления |
-| Чат | 64K | быстрые ответы, размышления короче |
-| Без размышлений | 64K | перевод, короткие ответы, скрипты, пакетные прогоны |
-| Зрение | 64K | чат с картинками; нужен `mmproj`-файл модели (`MMPROJ_PATH`) |
-| Параллельно | 4 × 8K | четыре запроса одновременно: пакетная обработка, несколько клиентов |
+| Режим | Контекст | Для чего | Зрение |
+|---|---|---|---|
+| Агент | 128K | OpenCode и другие агенты: длинный контекст, полные размышления | нет: не хватит видеопамяти рядом со 128K |
+| Чат | 64K | обычный чат, размышления короче | можно включить |
+| Параллельно | 4 × 8K | четыре запроса одновременно: пакетная обработка, несколько клиентов | можно включить |
+
+Под карточками режимов два тумблера:
+
+- **Зрение** подключает модуль зрения модели (`MMPROJ_PATH`, ещё ~1 ГБ видеопамяти): модель понимает
+  скриншоты, документы и фото. Тумблер доступен в режимах, где в `profiles.json` задан ключ `mmproj`.
+  Ключ `vision` решает, включено ли зрение по умолчанию.
+- **Размышления.** Выключенный тумблер добавляет `--reasoning off`: модель отвечает сразу. Это подходит
+  для перевода, коротких ответов и пакетных прогонов. Если в шаблоне чата модели нет режима размышлений,
+  тумблер неактивен.
+
+Положение тумблеров Studio запоминает для каждого режима отдельно. Если сервер уже работает, новые
+настройки применяет кнопка «Применить изменения». Если у вас `profiles.json` из версии 1.2 с отдельными
+режимами «Без размышлений» и «Зрение», возьмите новый файл из архива и перенесите в него свои правки.
 
 Переключатель **Основная / Запасная** запускает тот же режим на `FALLBACK_MODEL_PATH` (и
 `FALLBACK_SERVER_EXE`, если он задан). Для запасной модели Studio убирает аргументы `--spec-*`,
@@ -165,7 +177,7 @@ ComfyUI выгрузить модели. Во время генерации Stud
 | `WEBUI_PORT` | порт Open WebUI |
 | `SERVER_EXE`, `MODEL_PATH` | llama-server и модель; пустой `SERVER_EXE` — самая свежая `llama-bNNNN\` |
 | `FALLBACK_SERVER_EXE`, `FALLBACK_MODEL_PATH` | запасная сборка и модель |
-| `MMPROJ_PATH` | модуль зрения для режима «Зрение» |
+| `MMPROJ_PATH` | модуль зрения для тумблера «Зрение» |
 | `COMFYUI_DIR`, `COMFYUI_ARGS` | ComfyUI и его дополнительные аргументы |
 | `POWER_LIMIT_W` | лимит мощности видеокарты для кнопки в «Обслуживании»; пусто — кнопки нет |
 
@@ -227,9 +239,9 @@ around Qwen3.8-27B on a 16 GB graphics card, and the default modes are tuned for
 
 ### Features
 
-- **One-click modes.** Agent, chat, no thinking, vision and parallel requests. A mode is a set of
-  llama-server arguments in `profiles.json`. Switching modes restarts the server. If a request is in
-  progress, Studio asks first.
+- **One-click modes.** Agent, chat and parallel requests, with *Зрение* (Vision) and *Размышления*
+  (Thinking) toggles under them. A mode is a set of llama-server arguments in `profiles.json`. Switching
+  modes restarts the server. If a request is in progress, Studio asks first.
 - **Main and fallback model.** Any mode can run on a second model: for example, the previous proven
   version when a new one misbehaves.
 - **See what is going on.** Generation and prompt speed, busy slots, and GPU memory, load, power and
@@ -242,7 +254,8 @@ around Qwen3.8-27B on a 16 GB graphics card, and the default modes are tuned for
 - **Updates.** Studio downloads the latest llama.cpp CUDA build from GitHub into a separate folder and
   leaves the current one in place. Open WebUI is updated through `uv`.
 - **Small things.** Start with Windows (optionally bringing the server up in the last mode), archiving of
-  old logs, light and dark theme. Closing the window leaves the server running unless you choose to stop it.
+  old logs, light and dark theme in the Windows 11 style ([light theme screenshot](docs/screenshot-light.png)).
+  Closing the window leaves the server running unless you choose to stop it.
 
 The tabs:
 
@@ -289,13 +302,25 @@ logs\studio\           server logs, statistics, window settings
 Modes live in `profiles.json`. You can edit them and add your own: *Настройки → Обслуживание → Профили →
 Изменить* (Settings → Maintenance → Profiles → Edit), then *Перечитать* (Reload).
 
-| Mode | In the app | Context | Use it for |
-|---|---|---|---|
-| Agent | Агент | 128K | OpenCode and other agents: long context, full reasoning |
-| Chat | Чат | 64K | quick answers with shorter reasoning |
-| No thinking | Без размышлений | 64K | translation, short answers, scripts, batch runs |
-| Vision | Зрение | 64K | chat with images; needs the model's `mmproj` file (`MMPROJ_PATH`) |
-| Parallel | Параллельно | 4 × 8K | four requests at once: batch processing, several clients |
+| Mode | In the app | Context | Use it for | Vision |
+|---|---|---|---|---|
+| Agent | Агент | 128K | OpenCode and other agents: long context, full reasoning | no: not enough video memory next to 128K |
+| Chat | Чат | 64K | everyday chat with shorter reasoning | can be turned on |
+| Parallel | Параллельно | 4 × 8K | four requests at once: batch processing, several clients | can be turned on |
+
+Two toggles sit under the mode cards:
+
+- ***Зрение* (Vision)** loads the model's vision projector (`MMPROJ_PATH`, about 1 GB more video memory),
+  so the model understands screenshots, documents and photos. The toggle is available in modes that have
+  an `mmproj` key in `profiles.json`. The `vision` key decides whether vision is on by default.
+- ***Размышления* (Thinking).** Turning it off adds `--reasoning off`, so the model answers right away.
+  Use it for translation, short answers and batch runs. If the model's chat template has no thinking
+  mode, the toggle is disabled.
+
+Studio remembers the toggles for each mode separately. While the server is running, *Применить изменения*
+(Apply changes) restarts it with the new settings. If your `profiles.json` comes from version 1.2, with
+separate *Без размышлений* (No thinking) and *Зрение* (Vision) modes, take the new file from the archive and
+move your edits into it.
 
 The **Основная / Запасная** (Main / Fallback) switch runs the same mode on `FALLBACK_MODEL_PATH` (and
 `FALLBACK_SERVER_EXE`, if set). For the fallback model Studio drops `--spec-*` arguments, caps the context
@@ -363,7 +388,7 @@ All settings live in `server_config.env`. The full list with comments is in
 | `WEBUI_PORT` | Open WebUI port |
 | `SERVER_EXE`, `MODEL_PATH` | llama-server and the model; an empty `SERVER_EXE` means the newest `llama-bNNNN\` |
 | `FALLBACK_SERVER_EXE`, `FALLBACK_MODEL_PATH` | fallback build and model |
-| `MMPROJ_PATH` | vision projector for the Vision mode |
+| `MMPROJ_PATH` | vision projector for the *Зрение* (Vision) toggle |
 | `COMFYUI_DIR`, `COMFYUI_ARGS` | ComfyUI folder and extra arguments |
 | `POWER_LIMIT_W` | GPU power limit for the button in Maintenance; empty hides the button |
 

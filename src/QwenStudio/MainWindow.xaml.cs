@@ -101,6 +101,8 @@ namespace QwenStudio
             Loaded += async (_, _) =>
             {
                 oldModel = ui.Get("MODEL") == "old";
+                // the toggles ask the models whether they can reason: read both headers once, off the UI thread
+                await Task.Run(() => { foreach (var k in new[] { "MODEL_PATH", "FALLBACK_MODEL_PATH" }) Gguf.Thinks(Paths.Resolve(cfg.Env.Get(k))); });
                 LoadProfiles();
                 srv.Attach(profiles, cfg.Port);
                 if (srv.Profile != null && srv.Profile.Old != oldModel) { oldModel = srv.Profile.Old; LoadProfiles(); }
@@ -110,7 +112,7 @@ namespace QwenStudio
                 (ui.Get("CHART") == "live" ? ChartLive : ChartDay).IsChecked = true;
                 ModelMain.ToolTip = IOPath.GetFileName(cfg.Env.Get("MODEL_PATH"));
                 ModelOld.ToolTip = IOPath.GetFileName(cfg.Env.Get("FALLBACK_MODEL_PATH")) + " — запасная модель: без MTP, контекст до 96K";
-                if (srv.Profile != null) Select(srv.Profile);
+                if (srv.Profile != null) SelectVariant(srv.Profile);
                 FillSettings();
                 if (srv.State == ServerState.Stopped) srv.Emit($"Готово. Сервер остановлен · {profiles.Count} {(profiles.Count % 10 is >= 2 and <= 4 && profiles.Count % 100 is < 12 or > 14 ? "профиля" : profiles.Count % 10 == 1 && profiles.Count % 100 != 11 ? "профиль" : "профилей")} · {cfg.LanIp}");
                 UpdateUi();
@@ -186,6 +188,7 @@ namespace QwenStudio
 
             ProfilesPanel.Children.Clear();
             profileDots.Clear();
+            profileBadges.Clear();
             foreach (var p in profiles)
             {
                 var dot = new Ellipse { Style = R<Style>("Dot"), Margin = R<Thickness>("GapRightS"), Visibility = Visibility.Collapsed };
@@ -196,15 +199,21 @@ namespace QwenStudio
                 head.Children.Add(new TextBlock { Text = p.Name, Style = R<Style>("BodyStrong") });
                 var body = new StackPanel();
                 body.Children.Add(head);
-                body.Children.Add(new TextBlock { Text = p.For(oldModel).Badge, Style = R<Style>("Label") });
+                var badge = new TextBlock { Style = R<Style>("Label"), TextWrapping = TextWrapping.Wrap };
+                profileBadges[p] = badge;
+                body.Children.Add(badge);
                 var rb = new RadioButton { Style = R<Style>("ProfileCard"), GroupName = "profile", Content = body, Tag = p };
                 if (!string.IsNullOrWhiteSpace(p.Description)) rb.ToolTip = p.Description;
-                rb.Checked += (s, _) => { selected = (Profile)((RadioButton)s).Tag; SaveUiState(); UpdateUi(); };
+                rb.Checked += (s, _) => { selected = (Profile)((RadioButton)s).Tag; SaveUiState(); ShowOptions(); UpdateUi(); };
                 ProfilesPanel.Children.Add(rb);
             }
 
             var last = ui.Get("PROFILE");
-            Select(profiles.FirstOrDefault(p => p.Id == last) ?? profiles.FirstOrDefault());
+            var same = profiles.FirstOrDefault(p => p.Id == last);
+            if (same != null) Select(same);
+            else if (Profile.Resolve(profiles, last, oldModel) is Profile former) SelectVariant(former);   // «Без размышлений» → «Чат» with thinking off
+            else Select(profiles.FirstOrDefault());
+            ShowOptions();
             ProfilesText.Text = $"profiles.json · {profiles.Count} шт.";
         }
 
@@ -215,10 +224,77 @@ namespace QwenStudio
                 if (((Profile)rb.Tag).Id == p.Id) rb.IsChecked = true;
         }
 
-        bool oldModel;
+        /// <summary>Selects a launch variant's mode and sets that mode's toggles to match it (the running server, a former card).</summary>
+        void SelectVariant(Profile v)
+        {
+            var p = profiles.FirstOrDefault(x => x.Id == v.Id);
+            if (p == null) return;
+            try
+            {
+                if (SeeBlock(p) == null) ui.Set("VISION_" + p.Id, v.Sees ? "1" : "0");
+                if (ThinkBlock() == null) ui.Set("THINK_" + p.Id, v.Thinks ? "1" : "0");
+            }
+            catch { }
+            Select(p);
+            ShowOptions();
+        }
 
-        /// <summary>The selected mode on the selected model — what Start will launch.</summary>
-        Profile Chosen => selected?.For(oldModel);
+        bool oldModel;
+        bool showingOptions;
+        readonly Dictionary<Profile, TextBlock> profileBadges = new();
+
+        /// <summary>The selected mode on the selected model with its toggles — what Start will launch.</summary>
+        Profile Chosen => selected == null ? null : VariantOf(selected);
+
+        /// <summary>A mode on the selected model with its remembered toggles; what the mode or the model cannot do is off.</summary>
+        Profile VariantOf(Profile p) =>
+            p.Variant(oldModel, SeeBlock(p) == null && Wants(p, "VISION", p.VisionByDefault), ThinkBlock() == null && Wants(p, "THINK", p.ThinksByDefault));
+
+        bool Wants(Profile p, string option, bool byDefault) => ui.Get(option + "_" + p.Id) switch { "1" => true, "0" => false, _ => byDefault };
+
+        /// <summary>Why the mode cannot see on this model, or null when it can.</summary>
+        string SeeBlock(Profile p)
+        {
+            if (string.IsNullOrEmpty(p.Mmproj))
+                return $"В режиме «{p.Name}» зрение не предусмотрено: модулю зрения (~1 ГБ) не хватит видеопамяти рядом с его контекстом.";
+            var file = cfg.MmprojFile(p);
+            return File.Exists(file) ? null : $"Не найден модуль зрения:\n{file}\n\nУкажите путь в «Настройки → Сервер и модели».";
+        }
+
+        /// <summary>Why the selected model cannot reason, or null when it can (or it is not known: the model file is missing).</summary>
+        string ThinkBlock()
+        {
+            var model = Paths.Resolve(cfg.Env.Get(oldModel ? "FALLBACK_MODEL_PATH" : "MODEL_PATH"));
+            return Gguf.Thinks(model) == false
+                ? $"Модель {IOPath.GetFileName(model)} не умеет размышлять: в её шаблоне чата нет режима размышлений."
+                : null;
+        }
+
+        /// <summary>Puts the selected mode's toggles and every card's badge in line with the remembered options.</summary>
+        void ShowOptions()
+        {
+            foreach (var kv in profileBadges) kv.Value.Text = VariantOf(kv.Key).Badge;
+            if (selected == null) return;
+            showingOptions = true;
+            var see = SeeBlock(selected);
+            VisionToggle.IsEnabled = see == null;
+            VisionToggle.IsChecked = see == null && Wants(selected, "VISION", selected.VisionByDefault);
+            VisionToggle.ToolTip = see ?? "Модель понимает картинки: скриншоты, документы, фото. Модуль зрения занимает ещё ~1 ГБ видеопамяти.";
+            var think = ThinkBlock();
+            ThinkToggle.IsEnabled = think == null;
+            ThinkToggle.IsChecked = think == null && Wants(selected, "THINK", selected.ThinksByDefault);
+            ThinkToggle.ToolTip = think ?? "Модель размышляет перед ответом: точнее на сложных задачах, но отвечает дольше. Без размышлений — ответ сразу: перевод, короткие ответы, пакетные прогоны.";
+            showingOptions = false;
+        }
+
+        void Option_Changed(object sender, RoutedEventArgs e)
+        {
+            if (showingOptions || selected == null || !IsLoaded) return;
+            var box = (CheckBox)sender;
+            try { ui.Set((box == VisionToggle ? "VISION_" : "THINK_") + selected.Id, box.IsChecked == true ? "1" : "0"); } catch { }
+            ShowOptions();
+            UpdateUi();
+        }
 
         void Model_Checked(object sender, RoutedEventArgs e)
         {
@@ -238,7 +314,7 @@ namespace QwenStudio
 
         /// <summary>The running server is exactly what is selected in the sidebar.</summary>
         bool SelectionRuns => srv.Profile != null && selected != null && srv.State != ServerState.External &&
-                              srv.Profile.Id == selected.Id && srv.Profile.Old == oldModel;
+                              srv.Profile.Key == Chosen.Key;
 
         async void Primary_Click(object sender, RoutedEventArgs e)
         {
@@ -366,7 +442,7 @@ namespace QwenStudio
                 activity.Reset();
                 srv.Start(p, cfg);
                 LedgerEvent("start", p, auto ? "autostart" : null);
-                try { ui.Set("LAST_START", $"{p.Id}|{(p.Old ? "old" : "main")}"); } catch { }
+                try { ui.Set("LAST_START", p.Key); } catch { }
             }
             catch (Exception ex) { Fail(ex.Message); }
             finally { busy = false; UpdateUi(); }
@@ -403,8 +479,7 @@ namespace QwenStudio
         async Task AutoStartServer()
         {
             if (ui.Get("AUTOSTART_SERVER") != "1") return;
-            var parts = ui.Get("LAST_START").Split('|');
-            var p = profiles.FirstOrDefault(x => x.Id == parts[0])?.For(parts.Length > 1 && parts[1] == "old");
+            var p = Profile.FromKey(profiles, ui.Get("LAST_START"));
             if (p == null) { srv.Emit("Автозапуск: сервер ещё ни разу не запускался из Qwen Studio — нечего поднимать.", LogKind.Warn); return; }
             if (ServerUp) { srv.Emit("Автозапуск: сервер уже работает."); return; }
             srv.Emit($"Автозапуск: через 20 с подниму «{p.Title}», если видеокарта свободна.");
@@ -505,7 +580,7 @@ namespace QwenStudio
             (string text, string brush, string sub) s = st switch
             {
                 ServerState.Starting => ("Загружается…", "Warn", $"{running?.Title ?? "профиль"} · {Elapsed(now - srv.Since)}"),
-                ServerState.Running => ("Работает", "Good", string.Join(" · ", new[] { running?.Title, running?.Badge, srv.Build, "работает " + Elapsed(now - srv.Since) }.Where(x => !string.IsNullOrEmpty(x)))),
+                ServerState.Running => ("Работает", "Good", string.Join(" · ", new[] { running?.ModelTitle, running?.Badge, srv.Build, "работает " + Elapsed(now - srv.Since) }.Where(x => !string.IsNullOrEmpty(x)))),
                 ServerState.External => ("Работает (внешний)", "Warn", $"llama-server PID {srv.Pid} запущен не из Qwen Studio" + (srv.Build != null ? " · " + srv.Build : "")),
                 ServerState.Crashed => ("Упал", "Bad", $"{running?.Title} · {srv.ExitInfo} · подробности во вкладке «Журнал»"),
                 _ => ("Остановлен", "Muted", "выберите режим слева и запустите"),
@@ -582,8 +657,13 @@ namespace QwenStudio
             BtnPrimary.Visibility = showPrimary && st != ServerState.Starting ? Visibility.Visible : Visibility.Collapsed;
             BtnPrimary.IsEnabled = !busy && selected != null;
             if (busy) { BtnPrimaryIcon.Text = ""; BtnPrimaryText.Text = "Подождите…"; }
-            else if (!ServerUp) { BtnPrimaryIcon.Text = ""; BtnPrimaryText.Text = $"Запустить «{Chosen?.Title}»"; }
-            else { BtnPrimaryIcon.Text = ""; BtnPrimaryText.Text = $"Переключить на «{Chosen?.Title}»"; }
+            else if (!ServerUp) { BtnPrimaryIcon.Text = ""; BtnPrimaryText.Text = $"Запустить «{Chosen?.ShortTitle}»"; }
+            else if (running != null && Chosen != null && running.Id == Chosen.Id && running.Old == Chosen.Old && st != ServerState.External)
+            { BtnPrimaryIcon.Text = ""; BtnPrimaryText.Text = "Применить изменения"; }     // same mode, only the toggles differ
+            else { BtnPrimaryIcon.Text = ""; BtnPrimaryText.Text = running != null && Chosen != null && running.Id == Chosen.Id
+                ? (Chosen.Old ? "Переключить на запасную модель" : "Переключить на основную модель")   // same mode, the model switch moved
+                : $"Переключить на «{Chosen?.ShortTitle}»"; }
+            BtnPrimary.ToolTip = Chosen == null ? null : $"{Chosen.Title}\n{Chosen.Badge}";
             SecondaryActions.Visibility = ServerUp ? Visibility.Visible : Visibility.Collapsed;
             bool showRestart = ServerUp && same && st != ServerState.Starting;
             BtnRestart.Visibility = showRestart ? Visibility.Visible : Visibility.Collapsed;
@@ -1359,8 +1439,7 @@ namespace QwenStudio
             AutostartToggle.Checked += Autostart_Changed; AutostartToggle.Unchecked += Autostart_Changed;
             AutoServerToggle.Checked += AutoServer_Changed; AutoServerToggle.Unchecked += AutoServer_Changed;
 
-            var parts = ui.Get("LAST_START").Split('|');
-            var last = profiles.FirstOrDefault(x => x.Id == parts[0])?.For(parts.Length > 1 && parts[1] == "old");
+            var last = Profile.FromKey(profiles, ui.Get("LAST_START"));
             var info = last != null ? $"Последний запущенный режим: {last.Title}." : "Сервер ещё не запускался из этой версии — режим для автозапуска появится после первого запуска.";
             bool stale = false;
             try { stale = Autostart.Stale; } catch { }
