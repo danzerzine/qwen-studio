@@ -7,9 +7,20 @@
 **Пульт управления локальной LLM на Windows.** Запускает llama.cpp в нужном режиме одной кнопкой,
 показывает загрузку видеокарты и скорость, держит рядом Open WebUI, OpenCode и ComfyUI для картинок.
 
-[Возможности](#возможности) · [Быстрый старт](#быстрый-старт) · [Режимы](#режимы) · [Инструменты](#инструменты) · [Сборка](#сборка-из-исходников) · [English](#in-english)
+*A one-click control panel for a local llama.cpp server on Windows: modes, live GPU stats, Open WebUI,
+OpenCode and ComfyUI. [Full English description below.](#in-english)*
 
-<img src="docs/screenshot.png" alt="Qwen Studio: сервер в режиме «Параллельно», 4 слота заняты, график за 24 часа" width="900">
+[Возможности](#возможности) · [Быстрый старт](#быстрый-старт) · [Режимы](#режимы) · [Инструменты](#инструменты) · [Настройки](#настройки) · [Вопросы](#частые-вопросы) · [Сборка](#сборка-из-исходников)
+
+Отдельные страницы: [какой llama.cpp скачать](docs/llama-cpp.md) · [как обновить ComfyUI](docs/comfyui.md)
+
+[![build](https://github.com/danzerzine/qwen-studio/actions/workflows/build.yml/badge.svg)](https://github.com/danzerzine/qwen-studio/actions/workflows/build.yml)
+[![release](https://img.shields.io/github/v/release/danzerzine/qwen-studio)](https://github.com/danzerzine/qwen-studio/releases/latest)
+[![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
+**[English version ↓](#in-english)**
+
+<img src="docs/screenshot.png" alt="Qwen Studio: сервер в режиме «Параллельно» на запасной модели, 4 слота заняты, живой график за 5 минут" width="900">
 
 </div>
 
@@ -35,18 +46,31 @@ Studio вырос вокруг Qwen3.8-27B на видеокарте с 16 ГБ,
 - **Мелочи.** Автозапуск вместе с Windows (сервер тоже может стартовать сам), архив старых журналов,
   светлая и тёмная тема. Закрытие окна не останавливает сервер, если вы этого не хотите.
 
+Что на вкладках:
+
+| Вкладка | Что там |
+|---|---|
+| Обзор | состояние сервера, скорость, график «Сейчас / 24 часа», видеокарта, адрес API и ключ, события |
+| Журнал | журнал llama-server в реальном времени; фильтр «Только важное» |
+| Статистика | итоги (запросы, токены, часы работы) и таблица по дням за 30 дней |
+| Настройки | оформление, автозапуск, пути к сборке и моделям, сеть и брандмауэр, API-ключ, обновления, профили, старые журналы |
+
 ## Быстрый старт
 
 Нужно: Windows 10/11 x64, видеокарта NVIDIA и [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0).
 
-1. **Соберите Studio** (см. [сборку](#сборка-из-исходников)) или возьмите `QwenStudio.exe` из Releases.
-   Положите его в отдельную папку вместе с `profiles.json` и `server_config.example.env`.
-2. **Настройки.** Переименуйте `server_config.example.env` в `server_config.env`. Все поля можно заполнить
+1. **Скачайте** `QwenStudio-win-x64.zip` из [Releases](https://github.com/danzerzine/qwen-studio/releases/latest) и распакуйте в отдельную
+   папку. Или соберите сами (см. [сборку](#сборка-из-исходников)). Exe не подписан, поэтому при первом
+   запуске Windows SmartScreen может предупредить: «Подробнее» → «Выполнить в любом случае».
+2. **Настройки.** В папке уже лежит `server_config.env` с комментариями. Все поля можно заполнить
    и из самого приложения, во вкладке «Настройки».
 3. **Модель.** Скачайте GGUF (например, с [Hugging Face](https://huggingface.co/models?library=gguf)) и
    укажите путь в `MODEL_PATH` или в «Настройки → Сервер и модели».
-4. **llama.cpp.** В «Настройки → Обновления» нажмите «Проверить», затем «Скачать». Studio положит сборку
-   в `llama-bNNNN\` рядом с собой и сам её найдёт. Свою сборку можно указать в `SERVER_EXE`.
+4. **llama.cpp.** В «Настройки → Обновления» нажмите «Проверить», затем «Скачать bNNNN». Studio скачает
+   официальную CUDA 12 сборку с [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp/releases)
+   вместе с библиотеками CUDA, положит её в `llama-bNNNN\` рядом с собой и сам найдёт. Свою сборку можно
+   указать в `SERVER_EXE`. Какую сборку выбрать для RTX 50xx, AMD или Intel, как поставить её вручную
+   и откатиться — на странице [«Какой llama.cpp скачать»](docs/llama-cpp.md).
 5. **Запуск.** Выберите режим слева и нажмите «Запустить». API сервера:
    `http://127.0.0.1:8080/v1`, модель `local`. Это имя задаёт `--alias` в профилях.
 
@@ -127,6 +151,8 @@ Studio запускает ComfyUI на порту 8188 и открывает е�
 вся видеопамять, поэтому Studio предложит остановить LLM-сервер. Перед стартом сервера он попросит
 ComfyUI выгрузить модели. Во время генерации Studio ничего не остановит, не спросив вас.
 
+Новым моделям картинок часто нужен свежий ComfyUI: [как его обновить](docs/comfyui.md).
+
 ## Настройки
 
 Все параметры лежат в `server_config.env`. Список с комментариями — в
@@ -143,6 +169,25 @@ ComfyUI выгрузить модели. Во время генерации Stud
 | `COMFYUI_DIR`, `COMFYUI_ARGS` | ComfyUI и его дополнительные аргументы |
 | `POWER_LIMIT_W` | лимит мощности видеокарты для кнопки в «Обслуживании»; пусто — кнопки нет |
 
+## Частые вопросы
+
+**Сервер не запускается или сразу падает.** Откройте вкладку «Журнал»: там вывод llama-server. Чаще всего
+не хватает видеопамяти. Уменьшите `ctx` или `-np` в профиле, выберите квантизацию модели поменьше или
+закройте то, что держит память (браузер с аппаратным ускорением, игры).
+
+**«Работает (внешний)».** На порту уже работает llama-server, запущенный не из Studio. Остановить его
+Studio может, перезапустить в другом режиме — нет. Нажмите «Остановить» и запустите нужный режим.
+
+**Клиенты получают 401.** У клиента старый ключ. Про такие отказы пишет «Настройки → API-ключ». Скопируйте
+ключ кнопкой рядом с ним на «Обзоре».
+
+**Можно ли держать Studio закрытым?** Да. Studio — только пульт: сервер работает без него, а при следующем
+запуске Studio подхватит работающий сервер и его статистику.
+
+**Куда Studio ходит в интернет?** Только по кнопкам «Проверить» в «Обновлениях»: к GitHub (релизы
+llama.cpp) и PyPI (версия Open WebUI). Остальное общение идёт с локальными программами на `127.0.0.1`.
+Телеметрии нет.
+
 ## Сборка из исходников
 
 Нужен [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0).
@@ -151,26 +196,221 @@ ComfyUI выгрузить модели. Во время генерации Stud
 build.cmd
 ```
 
-Результат — `dist\QwenStudio.exe` с шаблонами конфигов. Это WPF-приложение на .NET 8 без внешних
-зависимостей. Код: `src/QwenStudio` — окно в `MainWindow.xaml(.cs)`, логика в `Core/`. Все размеры, цвета
+Результат — папка `dist\`: `QwenStudio.exe`, `profiles.json` и `server_config.env` из шаблона.
+
+GitHub Actions ([`build.yml`](.github/workflows/build.yml)) собирает то же самое на каждый push в `main` и
+кладёт `QwenStudio-win-x64.zip` в релиз «Последняя сборка» (latest). Тег `vX.Y.Z` создаёт отдельный релиз
+с этим номером.
+
+Это WPF-приложение на .NET 8 без внешних зависимостей. Код: `src/QwenStudio` — окно в `MainWindow.xaml(.cs)`, логика в `Core/`. Все размеры, цвета
 и отступы берутся из дизайн-системы, она описана в [`DESIGN.md`](src/QwenStudio/DESIGN.md).
 
 Пока только Windows, NVIDIA (данные о карте берутся через NVML) и русский интерфейс.
 
+---
+
 ## In English
 
-**Qwen Studio** is a Windows control panel for a local llama.cpp server. It starts the server in one of
-several modes (`profiles.json`): agent (128K), chat, no-thinking, vision, and 4 parallel slots. It can
-run any mode on a fallback model. It shows live GPU load, VRAM, power and tokens/s, and keeps 24-hour
-and daily statistics. It launches Open WebUI, OpenCode and ComfyUI, and unloads Ollama, LM Studio and
-ComfyUI models before starting so the models don't fight over VRAM. It manages the API key, LAN access
-and firewall rules, and downloads fresh llama.cpp CUDA builds. Works with any GGUF model.
-The UI is in Russian.
+[Features](#features) · [Quick start](#quick-start) · [Modes](#modes) · [Tools](#tools) · [Settings](#settings) · [FAQ](#faq) · [Building from source](#building-from-source) · [Русская версия ↑](#qwen-studio)
 
-Quick start: build with `build.cmd` (.NET 8 SDK), copy `server_config.example.env` to `server_config.env`,
-set `MODEL_PATH`, then download llama.cpp from *Настройки → Обновления* and press *Запустить*.
-The OpenAI-compatible API is at `http://127.0.0.1:8080/v1` with model id `local`.
+Guides: [which llama.cpp build to download](docs/llama-cpp.md#which-llamacpp-build-to-download) · [updating ComfyUI](docs/comfyui.md#updating-comfyui)
 
-## Лицензия
+**A control panel for a local LLM on Windows.** Qwen Studio starts llama.cpp in the mode you need with one
+click. It shows GPU load and generation speed, and keeps Open WebUI, OpenCode and ComfyUI (for images)
+one click away.
+
+It works with any GGUF model: Qwen, Llama, Gemma, Mistral and others. The name is historical: Studio grew
+around Qwen3.8-27B on a 16 GB graphics card, and the default modes are tuned for that pairing.
+
+> **The interface is in Russian.** UI labels below are given in Russian with a translation, so you can
+> find them in the app.
+
+### Features
+
+- **One-click modes.** Agent, chat, no thinking, vision and parallel requests. A mode is a set of
+  llama-server arguments in `profiles.json`. Switching modes restarts the server. If a request is in
+  progress, Studio asks first.
+- **Main and fallback model.** Any mode can run on a second model: for example, the previous proven
+  version when a new one misbehaves.
+- **See what is going on.** Generation and prompt speed, busy slots, and GPU memory, load, power and
+  temperature. A live 5-minute chart, 24-hour history and daily statistics.
+- **One card, one model.** Before starting, Studio unloads Ollama, LM Studio and ComfyUI models so two
+  models never share the card. If the server crashes with a CUDA error, Studio restarts it.
+- **LAN access and API key.** Generate a key with one click; the OpenCode and Open WebUI configs are
+  updated automatically. LAN access is a single toggle. Its firewall rules open the ports for the private
+  network profile and the local subnet only.
+- **Updates.** Studio downloads the latest llama.cpp CUDA build from GitHub into a separate folder and
+  leaves the current one in place. Open WebUI is updated through `uv`.
+- **Small things.** Start with Windows (optionally bringing the server up in the last mode), archiving of
+  old logs, light and dark theme. Closing the window leaves the server running unless you choose to stop it.
+
+The tabs:
+
+| Tab | In the app | What it shows |
+|---|---|---|
+| Overview | Обзор | server state, speed, the *Сейчас / 24 часа* (Now / 24 hours) chart, GPU, API address and key, events |
+| Log | Журнал | live llama-server log; the *Только важное* (Important only) filter |
+| Statistics | Статистика | totals (requests, tokens, hours running) and a 30-day table by day |
+| Settings | Настройки | theme, autostart, build and model paths, network and firewall, API key, updates, profiles, old logs |
+
+### Quick start
+
+You need Windows 10/11 x64, an NVIDIA GPU and the [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0).
+
+1. **Download** `QwenStudio-win-x64.zip` from [Releases](https://github.com/danzerzine/qwen-studio/releases/latest) and unpack it into its own
+   folder. Or build it yourself (see [building](#building-from-source)). The exe is not signed, so on the
+   first run Windows SmartScreen may warn you: click *More info* → *Run anyway*.
+2. **Settings file.** The folder already contains `server_config.env` with comments. Every field can also be
+   filled in from the app, on the *Настройки* (Settings) tab.
+3. **Model.** Download a GGUF (for example from [Hugging Face](https://huggingface.co/models?library=gguf))
+   and set its path in `MODEL_PATH` or in *Настройки → Сервер и модели* (Settings → Server and models).
+4. **llama.cpp.** In *Настройки → Обновления* (Settings → Updates) press *Проверить* (Check), then
+   *Скачать bNNNN* (Download). Studio downloads the official CUDA 12 build from
+   [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp/releases) together with its CUDA libraries,
+   puts it into `llama-bNNNN\` next to itself and finds it on its own. To use your own build, set `SERVER_EXE`.
+   Which build to pick for an RTX 50xx, AMD or Intel card, how to install it by hand and roll back:
+   see [Which llama.cpp build to download](docs/llama-cpp.md#which-llamacpp-build-to-download).
+5. **Run.** Pick a mode on the left and press *Запустить* (Start). The OpenAI-compatible API is at
+   `http://127.0.0.1:8080/v1` with model id `local`; the `--alias` argument in the profiles sets this name.
+
+Folder layout:
+
+```
+QwenStudio.exe
+profiles.json          server modes
+server_config.env      paths, port, key (do not publish it)
+llama-b1xxxx\          llama.cpp, downloaded from Updates
+models\                models, if you keep them here
+logs\studio\           server logs, statistics, window settings
+```
+
+### Modes
+
+Modes live in `profiles.json`. You can edit them and add your own: *Настройки → Обслуживание → Профили →
+Изменить* (Settings → Maintenance → Profiles → Edit), then *Перечитать* (Reload).
+
+| Mode | In the app | Context | Use it for |
+|---|---|---|---|
+| Agent | Агент | 128K | OpenCode and other agents: long context, full reasoning |
+| Chat | Чат | 64K | quick answers with shorter reasoning |
+| No thinking | Без размышлений | 64K | translation, short answers, scripts, batch runs |
+| Vision | Зрение | 64K | chat with images; needs the model's `mmproj` file (`MMPROJ_PATH`) |
+| Parallel | Параллельно | 4 × 8K | four requests at once: batch processing, several clients |
+
+The **Основная / Запасная** (Main / Fallback) switch runs the same mode on `FALLBACK_MODEL_PATH` (and
+`FALLBACK_SERVER_EXE`, if set). For the fallback model Studio drops `--spec-*` arguments, caps the context
+at 96K and turns off the prompt cache. This makes it easy to roll back to an older model or build.
+
+The defaults (`-ctk/-ctv q4_0`, `-ngl 999`, `--fit off`) are sized for a ~27B model in Q3/IQ4 on a 16 GB
+card. For another setup, tune `ctx`, the KV cache type and `-np`. If your model and llama.cpp build support
+MTP, add `"--spec-type", "draft-mtp", "--spec-draft-n-max", "1"` to `args` to speed up generation.
+
+### Tools
+
+#### Open WebUI: chat in the browser
+
+```bash
+uv tool install --python 3.11 open-webui
+```
+
+Studio looks for `%USERPROFILE%\.local\bin\open-webui.exe` (where `uv` installs it) and runs it on
+`WEBUI_PORT` (3000), already connected to the server with the current API key. *Открыть* (Open) starts
+WebUI and opens the browser. When you change the key, Studio writes the new key into WebUI's settings.
+
+#### OpenCode: coding agent
+
+Install [OpenCode](https://opencode.ai), either the desktop app or `npm i -g opencode-ai`; Studio opens
+whichever it finds. To connect it to the local server, edit `%USERPROFILE%\.config\opencode\opencode.jsonc`:
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "local": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Qwen Studio",
+      "options": { "baseURL": "http://127.0.0.1:8080/v1", "apiKey": "your LLAMA_API_KEY" },
+      "models": { "local": { "name": "Local model" } }
+    }
+  }
+}
+```
+
+When you change the key in Studio, it is replaced in this file too. The previous file is saved next to it.
+
+#### Images: ComfyUI
+
+1. Download the portable [ComfyUI](https://github.com/comfyanonymous/ComfyUI/releases) and unpack it.
+2. Set its folder in *Настройки → Сервер и модели → ComfyUI* (or `COMFYUI_DIR`). A git install with a
+   `venv` works too.
+3. Install an image model (Qwen-Image, FLUX, SDXL…) through ComfyUI's own templates.
+
+Studio starts ComfyUI on port 8188 and opens it in the browser. Large image models need almost all of the
+video memory, so Studio offers to stop the LLM server first. Before starting the server, it asks ComfyUI
+to unload its models. Studio never stops anything mid-generation without asking you.
+
+New image models often need a recent ComfyUI: [how to update it](docs/comfyui.md#updating-comfyui).
+
+### Settings
+
+All settings live in `server_config.env`. The full list with comments is in
+[`server_config.example.env`](server_config.example.env).
+
+| Key | Meaning |
+|---|---|
+| `LLAMA_API_KEY` | API key; empty means no key |
+| `HOST`, `PORT` | `127.0.0.1` for this PC only, `0.0.0.0` for the local network too; server port |
+| `WEBUI_PORT` | Open WebUI port |
+| `SERVER_EXE`, `MODEL_PATH` | llama-server and the model; an empty `SERVER_EXE` means the newest `llama-bNNNN\` |
+| `FALLBACK_SERVER_EXE`, `FALLBACK_MODEL_PATH` | fallback build and model |
+| `MMPROJ_PATH` | vision projector for the Vision mode |
+| `COMFYUI_DIR`, `COMFYUI_ARGS` | ComfyUI folder and extra arguments |
+| `POWER_LIMIT_W` | GPU power limit for the button in Maintenance; empty hides the button |
+
+### FAQ
+
+**The server does not start or crashes right away.** Open the *Журнал* (Log) tab: it shows llama-server's
+output. Most often the model runs out of video memory. Lower `ctx` or `-np` in the profile, pick a smaller
+quantization, or close whatever holds GPU memory (a browser with hardware acceleration, games).
+
+**"Работает (внешний)" (Running, external).** A llama-server that Studio did not start is already running on
+the port. Studio can stop it, but cannot restart it in another mode. Press *Остановить* (Stop), then start the
+mode you need.
+
+**Clients get 401.** The client has an old key. *Настройки → API-ключ* (Settings → API key) reports such
+rejected requests. Copy the key with the button next to it on the Overview tab.
+
+**Can I keep Studio closed?** Yes. Studio is only a control panel: the server runs without it, and the next
+time Studio starts it picks up the running server and its statistics.
+
+**What does Studio connect to on the internet?** Only when you press *Проверить* (Check) under Updates: GitHub
+(llama.cpp releases) and PyPI (the Open WebUI version). Everything else talks to local programs on
+`127.0.0.1`. There is no telemetry.
+
+### Building from source
+
+You need the [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0).
+
+```bash
+build.cmd
+```
+
+The result is the `dist\` folder: `QwenStudio.exe`, `profiles.json` and `server_config.env` made from the
+template.
+
+GitHub Actions ([`build.yml`](.github/workflows/build.yml)) builds the same on every push to `main` and puts
+`QwenStudio-win-x64.zip` into the "Последняя сборка" (latest build) release. A `vX.Y.Z` tag creates a separate
+release with that number.
+
+It is a WPF app on .NET 8 with no external
+dependencies. The code is in `src/QwenStudio`: the window is `MainWindow.xaml(.cs)`, the logic is in
+`Core/`. Every size, colour and spacing comes from the design system described in
+[`DESIGN.md`](src/QwenStudio/DESIGN.md).
+
+For now Studio supports only Windows and NVIDIA (GPU data comes from NVML), and the UI is in Russian.
+
+---
+
+## Лицензия / License
 
 [MIT](LICENSE)

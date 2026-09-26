@@ -1479,7 +1479,7 @@ namespace QwenStudio
             if (latest != null) { await InstallLlama(latest); return; }
             BtnLlamaUpd.IsEnabled = false;
             LlamaVer.Text = "проверяю…";
-            var localTask = Updates.LocalLlamaBuild(Paths.Resolve(cfg.Env.Get("SERVER_EXE")));
+            var localTask = Updates.LocalLlamaBuild(Paths.Resolve(cfg.Env.Get("SERVER_EXE", Paths.NewestLlama())));
             var remote = await Updates.LatestLlama();
             var local = await localTask;
             BtnLlamaUpd.IsEnabled = true;
