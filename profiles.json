@@ -1,0 +1,61 @@
+{
+  "_comment": "Режимы сервера. Studio подставляет сам: -m (модель), -c (ctx), --host, --port, --mmproj (если задан ключ mmproj) и API-ключ. server/model/mmproj — имена ключей из server_config.env. Переключатель «Запасная» запускает тот же режим на FALLBACK_MODEL_PATH: без --spec-*, контекст до 96K, без кэша промпта. Значения подобраны для модели ~27B в Q3/IQ4 на карте 16 ГБ; для другой связки меняйте ctx, -ctk/-ctv и -np.",
+  "profiles": [
+    {
+      "id": "agent",
+      "name": "Агент",
+      "badge": "128K",
+      "description": "Для OpenCode и других агентов: длинный контекст, полные размышления.",
+      "server": "SERVER_EXE",
+      "model": "MODEL_PATH",
+      "ctx": 131072,
+      "args": ["-ngl", "999", "--fit", "off", "--flash-attn", "on", "-ctk", "q4_0", "-ctv", "q4_0", "-b", "1024", "-ub", "256", "-np", "1",
+               "--jinja", "--reasoning", "on", "--reasoning-budget", "8192", "--cache-ram", "0", "--alias", "local"]
+    },
+    {
+      "id": "chat",
+      "name": "Чат",
+      "badge": "64K",
+      "description": "Быстрые ответы: короче размышления, меньше занято видеопамяти.",
+      "server": "SERVER_EXE",
+      "model": "MODEL_PATH",
+      "ctx": 65536,
+      "args": ["-ngl", "999", "--fit", "off", "--flash-attn", "on", "-ctk", "q4_0", "-ctv", "q4_0", "-b", "1024", "-ub", "256", "-np", "1",
+               "--jinja", "--reasoning", "on", "--reasoning-effort", "medium", "--reasoning-budget", "3072", "--cache-ram", "0", "--alias", "local"]
+    },
+    {
+      "id": "nothink",
+      "name": "Без размышлений",
+      "badge": "64K",
+      "description": "Ответ сразу, без размышлений: перевод, короткие ответы, скрипты и пакетные прогоны.",
+      "server": "SERVER_EXE",
+      "model": "MODEL_PATH",
+      "ctx": 65536,
+      "args": ["-ngl", "999", "--fit", "off", "--flash-attn", "on", "-ctk", "q4_0", "-ctv", "q4_0", "-b", "1024", "-ub", "256", "-np", "1",
+               "--jinja", "--reasoning", "off", "--cache-ram", "0", "--alias", "local"]
+    },
+    {
+      "id": "vision",
+      "name": "Зрение",
+      "badge": "64K · картинки",
+      "description": "Чат, который видит изображения: скриншоты, документы, фото. Нужен файл mmproj (MMPROJ_PATH), он занимает ещё ~1 ГБ.",
+      "server": "SERVER_EXE",
+      "model": "MODEL_PATH",
+      "mmproj": "MMPROJ_PATH",
+      "ctx": 65536,
+      "args": ["-ngl", "999", "--fit", "off", "--flash-attn", "on", "-ctk", "q4_0", "-ctv", "q4_0", "-b", "1024", "-ub", "256", "-np", "1",
+               "--jinja", "--reasoning", "on", "--reasoning-effort", "medium", "--reasoning-budget", "3072", "--cache-ram", "0", "--no-cache-prompt", "--alias", "local"]
+    },
+    {
+      "id": "parallel",
+      "name": "Параллельно",
+      "badge": "4 × 8K",
+      "description": "Четыре запроса одновременно: пакетная обработка, несколько клиентов.",
+      "server": "SERVER_EXE",
+      "model": "MODEL_PATH",
+      "ctx": 32768,
+      "args": ["-ngl", "999", "--fit", "off", "--flash-attn", "on", "-ctk", "q4_0", "-ctv", "q4_0", "-b", "1024", "-ub", "256", "-np", "4",
+               "--jinja", "--reasoning", "on", "--reasoning-effort", "medium", "--reasoning-budget", "3072", "--cache-ram", "0", "--alias", "local"]
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+# build output
+bin/
+obj/
+build/
+dist/
+
+# local settings and secrets
+server_config.env
+.webui_secret_key
+*.bak*
+
+# runtime data next to the exe
+logs/
+models/
+llama-b*/
+*.gguf

@@ -1,0 +1,626 @@
+<Window x:Class="QwenStudio.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Qwen Studio" Icon="app.ico"
+        Width="1240" Height="860" MinWidth="1060" MinHeight="720"
+        WindowStartupLocation="CenterScreen"
+        Background="{DynamicResource Bg}" Foreground="{DynamicResource Text}" FontFamily="{StaticResource UiFont}" FontSize="13"
+        TextOptions.TextFormattingMode="Display" UseLayoutRounding="True">
+    <!-- every size, colour and weight below is a role from studio/DESIGN.md -->
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition/>
+        </Grid.RowDefinitions>
+
+        <!-- ===================== HEADER ===================== -->
+        <DockPanel Margin="{StaticResource HeaderPad}">
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                <Border Style="{StaticResource Segments}">
+                    <StackPanel Orientation="Horizontal">
+                        <RadioButton x:Name="TabOverview" Style="{StaticResource Tab}" GroupName="page" Content="Обзор" IsChecked="True" Checked="Tab_Checked"/>
+                        <RadioButton x:Name="TabLog" Style="{StaticResource Tab}" GroupName="page" Content="Журнал" Checked="Tab_Checked"/>
+                        <RadioButton x:Name="TabStats" Style="{StaticResource Tab}" GroupName="page" Content="Статистика" Checked="Tab_Checked"/>
+                        <RadioButton x:Name="TabSettings" Style="{StaticResource Tab}" GroupName="page" Content="Настройки" Checked="Tab_Checked"/>
+                    </StackPanel>
+                </Border>
+                <Button x:Name="BtnTheme" Style="{StaticResource IconBtn}" FontSize="{StaticResource IconL}" Margin="{StaticResource GapLeftS}" Click="ThemeToggle_Click"/>
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <Image Source="app.ico" Width="{StaticResource LogoSize}" Height="{StaticResource LogoSize}" RenderOptions.BitmapScalingMode="HighQuality"/>
+                <TextBlock Text="Qwen Studio" Style="{StaticResource Title}" Margin="{StaticResource GapLeft}" VerticalAlignment="Center"/>
+                <Border Style="{StaticResource Chip}" Margin="{StaticResource GapLeft}">
+                    <StackPanel Orientation="Horizontal">
+                        <Ellipse x:Name="PillDot" Style="{StaticResource Dot}"/>
+                        <TextBlock x:Name="PillText" Text="Сервер остановлен" Style="{StaticResource Label}" Margin="{StaticResource GapLeftS}" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </DockPanel>
+
+        <Grid Grid.Row="1" Margin="{StaticResource BodyPad}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="{StaticResource SidebarWidth}"/>
+                <ColumnDefinition x:Name="GutterCol" Width="{StaticResource ColGap}"/>
+                <ColumnDefinition/>
+            </Grid.ColumnDefinitions>
+
+            <!-- ===================== SIDEBAR ===================== -->
+            <DockPanel x:Name="Sidebar">
+                <StackPanel DockPanel.Dock="Bottom">
+                    <TextBlock Text="ИНСТРУМЕНТЫ" Style="{StaticResource Caption}" Margin="{StaticResource GapTop}"/>
+                    <Border Style="{StaticResource Card}" Margin="{StaticResource GapTopS}">
+                        <StackPanel>
+                            <DockPanel>
+                                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                    <Button x:Name="BtnWebStop" Style="{StaticResource IconBtn}" Content="&#xE71A;" ToolTip="Остановить Open WebUI" Click="WebStop_Click" Visibility="Collapsed"/>
+                                    <Button x:Name="BtnWeb" Content="Запустить" Margin="{StaticResource GapLeftS}" Click="Web_Click"/>
+                                </StackPanel>
+                                <TextBlock Style="{StaticResource Icon}" FontSize="{StaticResource IconL}" Text="&#xE774;" Foreground="{DynamicResource Accent}"/>
+                                <StackPanel Margin="{StaticResource GapLeft}" VerticalAlignment="Center">
+                                    <TextBlock Text="Open WebUI" Style="{StaticResource BodyStrong}"/>
+                                    <StackPanel Orientation="Horizontal">
+                                        <Ellipse x:Name="WebDot" Style="{StaticResource Dot}"/>
+                                        <TextBlock x:Name="WebState" Text="выключен" Style="{StaticResource Label}" Margin="{StaticResource GapLeftS}"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </DockPanel>
+                            <Border Style="{StaticResource Divider}" Margin="{StaticResource DividerGap}"/>
+                            <DockPanel>
+                                <Button DockPanel.Dock="Right" x:Name="BtnOpencode" Content="Открыть" Click="Opencode_Click"/>
+                                <TextBlock Style="{StaticResource Icon}" FontSize="{StaticResource IconL}" Text="&#xE756;" Foreground="{DynamicResource Accent}"/>
+                                <StackPanel Margin="{StaticResource GapLeft}" VerticalAlignment="Center">
+                                    <TextBlock Text="OpenCode" Style="{StaticResource BodyStrong}"/>
+                                    <TextBlock x:Name="TxtOpencodeKind" Text="агент в терминале" Style="{StaticResource Label}"/>
+                                </StackPanel>
+                            </DockPanel>
+                            <Border Style="{StaticResource Divider}" Margin="{StaticResource DividerGap}"/>
+                            <DockPanel ToolTip="ComfyUI (:8188): генерация картинок. Папка ComfyUI задаётся в «Настройки → Сервер и модели». Моделям картинок нужна большая часть видеопамяти — вместе с языковой моделью они могут не поместиться.">
+                                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                    <Button x:Name="BtnImgStop" Style="{StaticResource IconBtn}" Content="&#xE71A;" ToolTip="Остановить ComfyUI" Click="ImgStop_Click" Visibility="Collapsed"/>
+                                    <Button x:Name="BtnImg" Content="Запустить" Margin="{StaticResource GapLeftS}" Click="Img_Click"/>
+                                </StackPanel>
+                                <TextBlock Style="{StaticResource Icon}" FontSize="{StaticResource IconL}" Text="&#xE91B;" Foreground="{DynamicResource Accent}"/>
+                                <StackPanel Margin="{StaticResource GapLeft}" VerticalAlignment="Center">
+                                    <TextBlock Text="Картинки" Style="{StaticResource BodyStrong}"/>
+                                    <StackPanel Orientation="Horizontal">
+                                        <Ellipse x:Name="ImgDot" Style="{StaticResource Dot}"/>
+                                        <TextBlock x:Name="ImgState" Text="выключен" Style="{StaticResource Label}" Margin="{StaticResource GapLeftS}"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </DockPanel>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+
+                <StackPanel DockPanel.Dock="Top">
+                    <TextBlock Text="МОДЕЛЬ" Style="{StaticResource Caption}"/>
+                    <Border Style="{StaticResource Segments}" Margin="{StaticResource GapBelow}">
+                        <UniformGrid Columns="2">
+                            <RadioButton x:Name="ModelMain" Style="{StaticResource Tab}" GroupName="model" Content="Основная" HorizontalContentAlignment="Center" Checked="Model_Checked"/>
+                            <RadioButton x:Name="ModelOld" Style="{StaticResource Tab}" GroupName="model" Content="Запасная" HorizontalContentAlignment="Center" Checked="Model_Checked"/>
+                        </UniformGrid>
+                    </Border>
+                    <TextBlock Text="РЕЖИМ" Style="{StaticResource Caption}"/>
+                    <StackPanel x:Name="ProfilesPanel"/>
+
+                    <!-- actions: one Primary (start / switch), stop is an outline and never the loudest thing -->
+                    <Button x:Name="BtnPrimary" Style="{StaticResource Primary}" Height="{StaticResource HAction}" Margin="{StaticResource GapTopS}" Click="Primary_Click">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock x:Name="BtnPrimaryIcon" Style="{StaticResource Icon}" FontSize="{StaticResource IconS}" Text="&#xE768;" Foreground="{DynamicResource OnAccent}"/>
+                            <TextBlock x:Name="BtnPrimaryText" Text="Запустить" Margin="{StaticResource GapLeftS}" Foreground="{DynamicResource OnAccent}" TextTrimming="CharacterEllipsis"/>
+                        </StackPanel>
+                    </Button>
+                    <Grid x:Name="SecondaryActions" Margin="{StaticResource GapTopS}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition x:Name="RestartCol"/>
+                            <ColumnDefinition x:Name="ActionGapCol" Width="{StaticResource ColGapS}"/>
+                            <ColumnDefinition/>
+                        </Grid.ColumnDefinitions>
+                        <Button x:Name="BtnRestart" Click="Restart_Click">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Style="{StaticResource Icon}" FontSize="{StaticResource IconS}" Text="&#xE72C;"/>
+                                <TextBlock Text="Перезапустить" Margin="{StaticResource GapLeftS}"/>
+                            </StackPanel>
+                        </Button>
+                        <Button x:Name="BtnStop" Grid.Column="2" Style="{StaticResource DangerOutline}" Click="Stop_Click">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Style="{StaticResource Icon}" FontSize="{StaticResource IconS}" Text="&#xE71A;" Foreground="{DynamicResource Bad}"/>
+                                <TextBlock Text="Остановить" Margin="{StaticResource GapLeftS}" Foreground="{DynamicResource Bad}"/>
+                            </StackPanel>
+                        </Button>
+                    </Grid>
+                    <TextBlock x:Name="ActionHint" Style="{StaticResource Hint}" Margin="{StaticResource GapTopS}" Visibility="Collapsed"/>
+                </StackPanel>
+            </DockPanel>
+
+            <!-- ===================== OVERVIEW ===================== -->
+            <Grid x:Name="PageOverview" Grid.Column="2">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="{StaticResource ColGap}"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="{StaticResource ColGap}"/>
+                    <RowDefinition/>
+                </Grid.RowDefinitions>
+
+                <!-- hero: state + four metrics -->
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
+                        <DockPanel>
+                            <Border x:Name="ActivityChip" DockPanel.Dock="Right" Style="{StaticResource Chip}" VerticalAlignment="Top">
+                                <StackPanel Orientation="Horizontal">
+                                    <Ellipse x:Name="ActivityDot" Style="{StaticResource Dot}"/>
+                                    <TextBlock x:Name="ActivityText" Text="—" Margin="{StaticResource GapLeftS}" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Border>
+                            <StackPanel>
+                                <TextBlock Text="СЕРВЕР" Style="{StaticResource Caption}"/>
+                                <TextBlock x:Name="StateText" Text="Остановлен" Style="{StaticResource Display}" Foreground="{DynamicResource Muted}"/>
+                                <TextBlock x:Name="StateSub" Text="выберите режим слева" Style="{StaticResource Label}" Margin="{StaticResource GapTopS}" TextTrimming="CharacterEllipsis"/>
+                            </StackPanel>
+                        </DockPanel>
+                        <Border Style="{StaticResource Divider}" Margin="{StaticResource DividerGap}"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition/>
+                                <ColumnDefinition Width="{StaticResource ColGapL}"/>
+                                <ColumnDefinition/>
+                                <ColumnDefinition Width="{StaticResource ColGapL}"/>
+                                <ColumnDefinition/>
+                                <ColumnDefinition Width="{StaticResource ColGapL}"/>
+                                <ColumnDefinition/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel ToolTip="Сколько токенов в секунду генерируют все слоты вместе прямо сейчас (среднее за 5 с)">
+                                <TextBlock Text="Скорость сейчас" Style="{StaticResource Label}"/>
+                                <TextBlock x:Name="AggTps" Text="—" Style="{StaticResource Metric}"/>
+                                <TextBlock x:Name="AggSub" Text="все слоты вместе" Style="{StaticResource Label}" TextTrimming="CharacterEllipsis"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Text="Последний запрос" Style="{StaticResource Label}"/>
+                                <TextBlock x:Name="GenTps" Text="—" Style="{StaticResource Metric}"/>
+                                <TextBlock x:Name="LastSub" Text="—" Style="{StaticResource Label}" TextTrimming="CharacterEllipsis"
+                                           ToolTip="Скорость чтения промпта · доля принятых черновых токенов MTP"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="4">
+                                <TextBlock Text="Запросов за час" Style="{StaticResource Label}"/>
+                                <TextBlock x:Name="ReqHour" Text="—" Style="{StaticResource Metric}"/>
+                                <TextBlock x:Name="ReqSub" Text="—" Style="{StaticResource Label}" TextTrimming="CharacterEllipsis"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="6" x:Name="CleanTile">
+                                <TextBlock Text="Без сбоев" Style="{StaticResource Label}"/>
+                                <TextBlock x:Name="CleanText" Text="—" Style="{StaticResource Metric}"/>
+                                <TextBlock x:Name="CleanSub" Text="—" Style="{StaticResource Label}" TextTrimming="CharacterEllipsis"/>
+                            </StackPanel>
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
+                <!-- load chart + gpu -->
+                <Grid Grid.Row="2">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="1.6*"/>
+                        <ColumnDefinition Width="{StaticResource ColGap}"/>
+                        <ColumnDefinition/>
+                    </Grid.ColumnDefinitions>
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <DockPanel Margin="{StaticResource GapBelow}">
+                                <Border DockPanel.Dock="Right" Style="{StaticResource Segments}" VerticalAlignment="Center">
+                                    <StackPanel Orientation="Horizontal">
+                                        <RadioButton x:Name="ChartLive" Style="{StaticResource Tab}" GroupName="chartSpan" Content="Сейчас" Checked="ChartSpan_Checked"
+                                                     ToolTip="Последние 5 минут: загрузка видеокарты каждые 3 секунды — видно любую работу, включая замеры и чужие программы"/>
+                                        <RadioButton x:Name="ChartDay" Style="{StaticResource Tab}" GroupName="chartSpan" Content="24 часа" Checked="ChartSpan_Checked"
+                                                     ToolTip="Запросы к серверу за сутки, столбик — 15 минут"/>
+                                    </StackPanel>
+                                </Border>
+                                <StackPanel VerticalAlignment="Center">
+                                    <TextBlock x:Name="ChartTitle" Text="НАГРУЗКА ЗА 24 ЧАСА" Style="{StaticResource Caption}"/>
+                                    <TextBlock x:Name="ChartSummary" Style="{StaticResource Label}" Margin="{StaticResource GapTopS}"/>
+                                </StackPanel>
+                            </DockPanel>
+                            <UniformGrid x:Name="ChartBars" Rows="1" Columns="96" Height="{StaticResource ChartHeight}" Background="Transparent"/>
+                            <Grid x:Name="LiveChart" Height="{StaticResource ChartHeight}" Background="Transparent" Visibility="Collapsed"
+                                  SizeChanged="LiveChart_SizeChanged" MouseLeave="LiveChart_MouseLeave">
+                                <Path x:Name="LiveArea" Fill="{DynamicResource AccentSoft}"/>
+                                <Path x:Name="LiveLine" Stroke="{DynamicResource Accent}" StrokeThickness="{StaticResource ChartStroke}"
+                                      StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                                <Ellipse x:Name="LiveDot" Style="{StaticResource Dot}" Fill="{DynamicResource Accent}" HorizontalAlignment="Left"
+                                         VerticalAlignment="Top" Visibility="Collapsed" IsHitTestVisible="False"/>
+                                <UniformGrid x:Name="LiveHits" Rows="1" Columns="100" Background="Transparent"/>
+                            </Grid>
+                            <Grid x:Name="ChartAxis" Margin="{StaticResource GapTopS}"/>
+                        </StackPanel>
+                    </Border>
+                    <Border Grid.Column="2" Style="{StaticResource Card}">
+                        <StackPanel>
+                            <DockPanel>
+                                <TextBlock x:Name="GpuName" DockPanel.Dock="Right" Style="{StaticResource Label}"/>
+                                <TextBlock Text="ВИДЕОКАРТА" Style="{StaticResource Caption}"/>
+                            </DockPanel>
+                            <DockPanel>
+                                <TextBlock x:Name="VramPct" DockPanel.Dock="Right" Style="{StaticResource Label}" VerticalAlignment="Bottom"/>
+                                <TextBlock x:Name="VramText" Text="—" Style="{StaticResource Metric}" Margin="0"/>
+                            </DockPanel>
+                            <ProgressBar x:Name="VramBar" Margin="{StaticResource GapTopS}" Maximum="100"/>
+                            <Grid Margin="{StaticResource GapTop}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition/>
+                                    <ColumnDefinition/>
+                                    <ColumnDefinition/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="Загрузка" Style="{StaticResource Label}"/>
+                                    <TextBlock x:Name="GpuUtil" Text="—" Style="{StaticResource Value}"/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Text="Питание" Style="{StaticResource Label}"/>
+                                    <TextBlock x:Name="GpuPower" Text="—" Style="{StaticResource Value}"/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="2">
+                                    <TextBlock Text="Темп." Style="{StaticResource Label}"/>
+                                    <TextBlock x:Name="GpuTemp" Text="—" Style="{StaticResource Value}"/>
+                                </StackPanel>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+                </Grid>
+
+                <!-- connection + events -->
+                <Grid Grid.Row="4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition/>
+                        <ColumnDefinition Width="{StaticResource ColGap}"/>
+                        <ColumnDefinition/>
+                    </Grid.ColumnDefinitions>
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <TextBlock Text="ПОДКЛЮЧЕНИЕ" Style="{StaticResource Caption}"/>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="{StaticResource KeyColumn}"/>
+                                    <ColumnDefinition/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="{StaticResource RowHeight}"/>
+                                    <RowDefinition Height="{StaticResource RowHeight}"/>
+                                    <RowDefinition Height="{StaticResource RowHeight}"/>
+                                    <RowDefinition Height="{StaticResource RowHeight}"/>
+                                </Grid.RowDefinitions>
+                                <TextBlock Text="Локально" Style="{StaticResource Label}" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="UrlLocal" Grid.Column="1" Style="{StaticResource MonoText}"/>
+                                <Button Grid.Column="2" Style="{StaticResource IconBtn}" Content="&#xE8C8;" ToolTip="Копировать" Tag="local" Click="CopyUrl_Click"/>
+
+                                <TextBlock Grid.Row="1" Text="Сеть" Style="{StaticResource Label}" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="UrlLan" Grid.Row="1" Grid.Column="1" Style="{StaticResource MonoText}"/>
+                                <Button x:Name="BtnCopyLan" Grid.Row="1" Grid.Column="2" Style="{StaticResource IconBtn}" Content="&#xE8C8;" ToolTip="Копировать" Tag="lan" Click="CopyUrl_Click"/>
+
+                                <TextBlock Grid.Row="2" Text="Модель" Style="{StaticResource Label}" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="ModelAlias" Grid.Row="2" Grid.Column="1" Text="—" Style="{StaticResource MonoText}" TextTrimming="CharacterEllipsis"/>
+                                <Button Grid.Row="2" Grid.Column="2" Style="{StaticResource IconBtn}" Content="&#xE8C8;" ToolTip="Копировать" Tag="model" Click="CopyUrl_Click"/>
+
+                                <TextBlock Grid.Row="3" Text="Ключ" Style="{StaticResource Label}" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="KeyText" Grid.Row="3" Grid.Column="1" Style="{StaticResource MonoText}"/>
+                                <StackPanel Grid.Row="3" Grid.Column="2" Orientation="Horizontal">
+                                    <Button Style="{StaticResource IconBtn}" Content="&#xE7B3;" ToolTip="Показать / скрыть" Click="KeyEye_Click"/>
+                                    <Button Style="{StaticResource IconBtn}" Content="&#xE8C8;" ToolTip="Копировать ключ" Click="KeyCopy_Click"/>
+                                </StackPanel>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Grid.Column="2" Style="{StaticResource Card}">
+                        <DockPanel>
+                            <DockPanel DockPanel.Dock="Top" Margin="{StaticResource CaptionGap}">
+                                <Button DockPanel.Dock="Right" Style="{StaticResource Link}" Content="Весь журнал" Click="ShowLog_Click"/>
+                                <TextBlock Text="СОБЫТИЯ" Style="{StaticResource Caption}" Margin="0" VerticalAlignment="Center"/>
+                            </DockPanel>
+                            <ItemsControl x:Name="EventsList">
+                                <ItemsControl.Template>
+                                    <ControlTemplate TargetType="ItemsControl">
+                                        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                            <ItemsPresenter/>
+                                        </ScrollViewer>
+                                    </ControlTemplate>
+                                </ItemsControl.Template>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Margin="{StaticResource GapBelowS}">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition/>
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Top" Margin="{StaticResource GapRight}">
+                                                <TextBlock Text="{Binding Time}" Style="{StaticResource MonoText}" Foreground="{DynamicResource Faint}"/>
+                                                <Ellipse x:Name="d" Style="{StaticResource Dot}" Margin="{StaticResource GapLeftS}" Visibility="Hidden"/>
+                                            </StackPanel>
+                                            <TextBlock x:Name="t" Grid.Column="1" Text="{Binding Text}" TextWrapping="Wrap" Foreground="{DynamicResource Text}"/>
+                                        </Grid>
+                                        <DataTemplate.Triggers>
+                                            <DataTrigger Binding="{Binding Kind}" Value="Good">
+                                                <Setter TargetName="d" Property="Visibility" Value="Visible"/>
+                                                <Setter TargetName="d" Property="Fill" Value="{DynamicResource Good}"/>
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding Kind}" Value="Warn">
+                                                <Setter TargetName="d" Property="Visibility" Value="Visible"/>
+                                                <Setter TargetName="d" Property="Fill" Value="{DynamicResource Warn}"/>
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding Kind}" Value="Error">
+                                                <Setter TargetName="d" Property="Visibility" Value="Visible"/>
+                                                <Setter TargetName="d" Property="Fill" Value="{DynamicResource Bad}"/>
+                                                <Setter TargetName="t" Property="Foreground" Value="{DynamicResource Bad}"/>
+                                            </DataTrigger>
+                                        </DataTemplate.Triggers>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </DockPanel>
+                    </Border>
+                </Grid>
+            </Grid>
+
+            <!-- ===================== LOG ===================== -->
+            <Border x:Name="PageLog" Grid.Column="2" Style="{StaticResource Card}" Visibility="Collapsed">
+                <DockPanel>
+                    <DockPanel DockPanel.Dock="Top" Margin="{StaticResource CaptionGap}">
+                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                            <CheckBox x:Name="OnlyImportant" Content="Только важное" Margin="{StaticResource GapRightS}" VerticalAlignment="Center"
+                                      Checked="Filter_Changed" Unchecked="Filter_Changed"/>
+                            <Button Style="{StaticResource IconBtn}" Content="&#xE8C8;" ToolTip="Копировать журнал (или выделенное)" Click="LogCopy_Click"/>
+                            <Button Style="{StaticResource IconBtn}" Content="&#xE8A7;" ToolTip="Открыть файл журнала" Click="LogOpen_Click"/>
+                            <Button Style="{StaticResource IconBtn}" Content="&#xE74D;" ToolTip="Очистить окно" Click="LogClear_Click"/>
+                        </StackPanel>
+                        <TextBlock Text="ЖУРНАЛ СЕРВЕРА" Style="{StaticResource Caption}" Margin="0" VerticalAlignment="Center"/>
+                    </DockPanel>
+                    <ListBox x:Name="LogList" Background="Transparent" BorderThickness="0"
+                             SelectionMode="Extended" KeyDown="LogList_KeyDown"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"
+                             VirtualizingPanel.ScrollUnit="Pixel">
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+                                <Setter Property="Template">
+                                    <Setter.Value>
+                                        <ControlTemplate TargetType="ListBoxItem">
+                                            <Border x:Name="b" Background="Transparent" CornerRadius="{StaticResource RControl}">
+                                                <ContentPresenter/>
+                                            </Border>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsSelected" Value="True">
+                                                    <Setter TargetName="b" Property="Background" Value="{DynamicResource AccentSoft}"/>
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </Setter.Value>
+                                </Setter>
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Top" Margin="{StaticResource GapRight}">
+                                        <TextBlock Text="{Binding Time}" Style="{StaticResource MonoText}" Foreground="{DynamicResource Faint}"/>
+                                        <Ellipse x:Name="d" Style="{StaticResource Dot}" Margin="{StaticResource GapLeftS}" Visibility="Hidden"/>
+                                    </StackPanel>
+                                    <TextBlock x:Name="t" Grid.Column="1" Text="{Binding Text}" TextWrapping="Wrap"
+                                               FontFamily="{StaticResource Mono}" FontSize="12" Foreground="{DynamicResource LogText}"/>
+                                </Grid>
+                                <DataTemplate.Triggers>
+                                    <DataTrigger Binding="{Binding Kind}" Value="Info">
+                                        <Setter TargetName="t" Property="Foreground" Value="{DynamicResource Accent}"/>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding Kind}" Value="Good">
+                                        <Setter TargetName="d" Property="Visibility" Value="Visible"/>
+                                        <Setter TargetName="d" Property="Fill" Value="{DynamicResource Good}"/>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding Kind}" Value="Warn">
+                                        <Setter TargetName="d" Property="Visibility" Value="Visible"/>
+                                        <Setter TargetName="d" Property="Fill" Value="{DynamicResource Warn}"/>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding Kind}" Value="Error">
+                                        <Setter TargetName="d" Property="Visibility" Value="Visible"/>
+                                        <Setter TargetName="d" Property="Fill" Value="{DynamicResource Bad}"/>
+                                        <Setter TargetName="t" Property="Foreground" Value="{DynamicResource Bad}"/>
+                                    </DataTrigger>
+                                </DataTemplate.Triggers>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </DockPanel>
+            </Border>
+
+            <!-- ===================== SETTINGS ===================== -->
+            <!-- ═════════ STATISTICS ═════════ -->
+            <ScrollViewer x:Name="PageStats" Grid.ColumnSpan="3" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
+                <StackPanel MaxWidth="{StaticResource ContentMaxWidth}">
+                    <Border Style="{StaticResource Card}" Margin="{StaticResource GapBelow}">
+                        <StackPanel>
+                            <DockPanel Margin="{StaticResource CaptionGap}">
+                                <TextBlock x:Name="StatsSince" DockPanel.Dock="Right" Style="{StaticResource Label}"/>
+                                <TextBlock Text="ИТОГИ" Style="{StaticResource Caption}"/>
+                            </DockPanel>
+                            <Grid x:Name="StatsTable"/>
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource Card}" Margin="{StaticResource GapBelow}">
+                        <StackPanel>
+                            <DockPanel Margin="{StaticResource GapBelow}">
+                                <Border DockPanel.Dock="Right" Style="{StaticResource Segments}" VerticalAlignment="Center">
+                                    <StackPanel Orientation="Horizontal">
+                                        <RadioButton x:Name="DaysReq" Style="{StaticResource Tab}" GroupName="daysMetric" Content="Запросы" IsChecked="True" Checked="DaysMetric_Checked"/>
+                                        <RadioButton x:Name="DaysGen" Style="{StaticResource Tab}" GroupName="daysMetric" Content="Токены" Checked="DaysMetric_Checked"/>
+                                        <RadioButton x:Name="DaysUp" Style="{StaticResource Tab}" GroupName="daysMetric" Content="Часы работы" Checked="DaysMetric_Checked"/>
+                                    </StackPanel>
+                                </Border>
+                                <StackPanel VerticalAlignment="Center">
+                                    <TextBlock Text="ПО ДНЯМ · 30 ДНЕЙ" Style="{StaticResource Caption}"/>
+                                    <TextBlock x:Name="DaysSummary" Style="{StaticResource Label}" Margin="{StaticResource GapTopS}"/>
+                                </StackPanel>
+                            </DockPanel>
+                            <UniformGrid x:Name="DayBars" Rows="1" Columns="30" Height="{StaticResource ChartHeight}"/>
+                            <Grid x:Name="DayAxis" Margin="{StaticResource GapTopS}"/>
+                            <WrapPanel x:Name="DaysLegend" Margin="{StaticResource GapTop}"/>
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <TextBlock Text="ПО РЕЖИМАМ И МОДЕЛЯМ · ЗА ВСЁ ВРЕМЯ" Style="{StaticResource Caption}" Margin="{StaticResource CaptionGap}"/>
+                            <Grid x:Name="ModesTable"/>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+
+            <ScrollViewer x:Name="PageSettings" Grid.ColumnSpan="3" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
+                <StackPanel MaxWidth="{StaticResource ContentMaxWidth}" HorizontalAlignment="Left">
+
+                    <Border Style="{StaticResource Card}" Margin="{StaticResource GapBelow}">
+                        <DockPanel>
+                            <Border DockPanel.Dock="Right" Style="{StaticResource Segments}" VerticalAlignment="Center">
+                                <StackPanel Orientation="Horizontal">
+                                    <RadioButton x:Name="ThemeSystem" Style="{StaticResource Tab}" GroupName="theme" Content="Как в системе" Tag="System" Checked="Theme_Checked"/>
+                                    <RadioButton x:Name="ThemeLight" Style="{StaticResource Tab}" GroupName="theme" Content="Светлая" Tag="Light" Checked="Theme_Checked"/>
+                                    <RadioButton x:Name="ThemeDark" Style="{StaticResource Tab}" GroupName="theme" Content="Тёмная" Tag="Dark" Checked="Theme_Checked"/>
+                                </StackPanel>
+                            </Border>
+                            <TextBlock Text="Оформление" Style="{StaticResource Title}" VerticalAlignment="Center"/>
+                        </DockPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource Card}" Margin="{StaticResource GapBelow}">
+                        <StackPanel>
+                            <TextBlock Text="Автозапуск" Style="{StaticResource Title}" Margin="{StaticResource GapBelowS}"/>
+                            <TextBlock Style="{StaticResource Hint}" Text="Qwen Studio — главный способ держать сервер. Со входом в Windows он может открываться свёрнутым и сам поднимать последний запущенный режим. Старт пропускается, если видеокарту уже занимают Ollama, LM Studio или другие программы (больше 1,5 ГБ), — об этом появится событие."/>
+                            <CheckBox x:Name="AutostartToggle" Content="Открывать Qwen Studio при входе в Windows" Checked="Autostart_Changed" Unchecked="Autostart_Changed"/>
+                            <CheckBox x:Name="AutoServerToggle" Content="Запускать сервер в последнем режиме" Margin="{StaticResource GapTop}" Checked="AutoServer_Changed" Unchecked="AutoServer_Changed"/>
+                            <TextBlock x:Name="AutostartInfo" Style="{StaticResource Label}" Margin="{StaticResource GapTopS}" TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource Card}" Margin="{StaticResource GapBelow}">
+                        <StackPanel>
+                            <TextBlock Text="Сервер и модели" Style="{StaticResource Title}" Margin="{StaticResource GapBelowS}"/>
+                            <TextBlock Style="{StaticResource Hint}" Text="Пути относительно папки проекта или абсолютные. Сохраняются в server_config.env и применяются при следующем запуске."/>
+                            <StackPanel x:Name="PathsPanel"/>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource Card}" Margin="{StaticResource GapBelow}">
+                        <StackPanel>
+                            <TextBlock Text="Сеть" Style="{StaticResource Title}" Margin="{StaticResource GapBelowS}"/>
+                            <TextBlock Style="{StaticResource Hint}" Text="Чтобы другие устройства подключались к серверу и Open WebUI, нужен доступ из локальной сети и открытые порты в брандмауэре (только частная сеть, только своя подсеть)."/>
+                            <CheckBox x:Name="LanToggle" Content="Доступ из локальной сети" Checked="Lan_Changed" Unchecked="Lan_Changed"/>
+                            <Grid Margin="{StaticResource GapTop}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="{StaticResource FieldColumn}"/>
+                                    <ColumnDefinition Width="{StaticResource FieldColumn}"/>
+                                    <ColumnDefinition/>
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="{StaticResource FieldRow}"/>
+                                    <RowDefinition Height="{StaticResource FieldRow}"/>
+                                    <RowDefinition Height="{StaticResource FieldRow}"/>
+                                </Grid.RowDefinitions>
+                                <TextBlock Text="Порт сервера" Style="{StaticResource Label}" VerticalAlignment="Center"/>
+                                <TextBox x:Name="PortBox" Grid.Column="1" Height="{StaticResource HControl}" LostFocus="Port_LostFocus"/>
+                                <TextBlock Grid.Row="1" Text="Адрес в сети" Style="{StaticResource Label}" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="LanIpText" Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Style="{StaticResource MonoText}"/>
+                                <TextBlock Grid.Row="2" Text="Брандмауэр" Style="{StaticResource Label}" VerticalAlignment="Center"/>
+                                <StackPanel Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" Orientation="Horizontal">
+                                    <TextBlock x:Name="FwText" Text="проверяю…" VerticalAlignment="Center" Foreground="{DynamicResource Muted}"/>
+                                    <Button x:Name="BtnFw" Content="Открыть порты" Margin="{StaticResource GapLeft}" Click="Firewall_Click"/>
+                                </StackPanel>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource Card}" Margin="{StaticResource GapBelow}">
+                        <StackPanel>
+                            <TextBlock Text="API-ключ" Style="{StaticResource Title}" Margin="{StaticResource GapBelowS}"/>
+                            <TextBlock Style="{StaticResource Hint}" Text="Один ключ для всех клиентов: Open WebUI, OpenCode и другие программы. После смены ключа сервер нужно перезапустить, а клиентам — выдать новый."/>
+                            <DockPanel>
+                                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                    <Button Style="{StaticResource IconBtn}" Content="&#xE7B3;" ToolTip="Показать / скрыть" Margin="{StaticResource GapLeftS}" Click="KeyEye_Click"/>
+                                    <Button Style="{StaticResource IconBtn}" Content="&#xE8C8;" ToolTip="Копировать" Click="KeyCopy_Click"/>
+                                    <Button Content="Новый ключ…" Margin="{StaticResource GapLeftS}" Click="KeyNew_Click"/>
+                                </StackPanel>
+                                <TextBox x:Name="KeyText2" IsReadOnly="True" Height="{StaticResource HControl}" FontFamily="{StaticResource Mono}" FontSize="12"/>
+                            </DockPanel>
+                            <TextBlock x:Name="RejectedInfo" Style="{StaticResource Label}" Margin="{StaticResource GapTopS}" Foreground="{DynamicResource Warn}" TextWrapping="Wrap" Visibility="Collapsed"/>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource Card}" Margin="{StaticResource GapBelow}">
+                        <StackPanel>
+                            <TextBlock Text="Обновления" Style="{StaticResource Title}" Margin="{StaticResource GapBelowS}"/>
+                            <TextBlock Style="{StaticResource Hint}" Text="Новая сборка llama.cpp ставится в отдельную папку llama-bNNNN — текущая остаётся нетронутой, вернуться можно в «Сервер и модели»."/>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="{StaticResource FieldColumn}"/>
+                                    <ColumnDefinition/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="{StaticResource FieldRow}"/>
+                                    <RowDefinition Height="{StaticResource FieldRow}"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                <TextBlock Text="llama.cpp" Style="{StaticResource Label}" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="LlamaVer" Grid.Column="1" Text="—" Foreground="{DynamicResource Muted}" VerticalAlignment="Center"/>
+                                <Button x:Name="BtnLlamaUpd" Grid.Column="2" Content="Проверить" Click="LlamaUpd_Click"/>
+                                <TextBlock Grid.Row="1" Text="Open WebUI" Style="{StaticResource Label}" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="WebVer" Grid.Row="1" Grid.Column="1" Text="—" Foreground="{DynamicResource Muted}" VerticalAlignment="Center"/>
+                                <Button x:Name="BtnWebUpd" Grid.Row="1" Grid.Column="2" Content="Проверить" Click="WebUpd_Click"/>
+                                <TextBlock x:Name="UpdProgress" Grid.Row="2" Grid.ColumnSpan="3" Style="{StaticResource Label}" Margin="{StaticResource GapTopS}" Visibility="Collapsed"/>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource Card}" Margin="{StaticResource GapBelow}">
+                        <StackPanel>
+                            <TextBlock Text="Обслуживание" Style="{StaticResource Title}" Margin="{StaticResource GapBelowS}"/>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="{StaticResource FieldColumn}"/>
+                                    <ColumnDefinition/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="{StaticResource FieldRow}"/>
+                                    <RowDefinition Height="{StaticResource FieldRow}"/>
+                                    <RowDefinition Height="{StaticResource FieldRow}"/>
+                                </Grid.RowDefinitions>
+                                <TextBlock Text="Лимит мощности" Style="{StaticResource Label}" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="PowerText" Grid.Column="1" Text="—" Foreground="{DynamicResource Muted}" VerticalAlignment="Center"/>
+                                <Button x:Name="BtnPower" Grid.Column="2" Content="Установить" Click="Power_Click"
+                                        ToolTip="nvidia-smi -pl POWER_LIMIT_W и задача автозапуска (нужны права администратора). Значение задаётся в server_config.env"/>
+                                <TextBlock Grid.Row="1" Text="Профили" Style="{StaticResource Label}" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="ProfilesText" Grid.Row="1" Grid.Column="1" Foreground="{DynamicResource Muted}" VerticalAlignment="Center"/>
+                                <StackPanel Grid.Row="1" Grid.Column="2" Orientation="Horizontal">
+                                    <Button Content="Изменить" Click="ProfilesEdit_Click"/>
+                                    <Button Content="Перечитать" Margin="{StaticResource GapLeftS}" Click="ProfilesReload_Click"/>
+                                </StackPanel>
+                                <TextBlock Grid.Row="2" Text="Старые журналы" Style="{StaticResource Label}" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="ArchiveText" Grid.Row="2" Grid.Column="1" Foreground="{DynamicResource Muted}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                                           ToolTip="Журналы сервера старше 7 дней раз в сутки упаковываются в logs\studio\archive\server-logs-ГГГГ-ММ.zip, оригинал уходит в корзину"/>
+                                <Button x:Name="BtnArchive" Grid.Row="2" Grid.Column="2" Content="Упаковать сейчас" Click="Archive_Click"/>
+                            </Grid>
+                            <WrapPanel Margin="{StaticResource GapTop}">
+                                <Button Content="Папка проекта" Margin="{StaticResource GapRightS}" Click="OpenFolder_Click"/>
+                                <Button Content="Журналы" Margin="{StaticResource GapRightS}" Click="OpenLogs_Click"/>
+                            </WrapPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <TextBlock x:Name="AboutText" Style="{StaticResource Label}" Foreground="{DynamicResource Faint}"/>
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+    </Grid>
+</Window>
