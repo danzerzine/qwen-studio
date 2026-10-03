@@ -59,6 +59,8 @@ namespace QwenStudio
         readonly List<DateTime> pendingRej = new();
         DateTime lastCudaAt, rejectNotedAt, lastArchive;
         int rejectsSinceNote;
+        readonly SortedSet<string> rejectFrom = new();
+        readonly ClientTracker clients = new();
 
         readonly EnvFile ui = new(IOPath.Combine(Paths.Logs, "ui.env"));
 
@@ -118,6 +120,8 @@ namespace QwenStudio
                 UpdateUi();
                 drainTimer.Start();
                 pollTimer.Start();
+                clients.Port = cfg.Port;
+                clients.Start(System.Threading.CancellationToken.None);
 
                 await LoadLedger();
                 _ = ArchiveLogs(manual: false);
@@ -152,15 +156,22 @@ namespace QwenStudio
             if (ledgerReady) ledger.Request(at, gen); else pendingReq.Add((at, gen));
         }
 
-        void OnRejected(DateTime at)
+        async void OnRejected(DateTime at)
         {
             if (ledgerReady) ledger.Reject(at); else pendingRej.Add(at);
             rejectsSinceNote++;
+            // the client tracker sees the connection within 250 ms; give it that time before asking who it was
+            var seenAt = DateTime.Now;
+            await Task.Delay(600);
+            var who = clients.Blame(seenAt);
+            if (who != null) rejectFrom.Add(who.Title);
             // a client with a stale key retries a lot: one event per 30 minutes is enough
             if (DateTime.Now - rejectNotedAt < TimeSpan.FromMinutes(30)) return;
-            srv.Emit($"Запрос с неверным API-ключом отклонён ({rejectsSinceNote} шт. с прошлого сообщения). У клиента старый ключ — выдайте ему текущий (Настройки → API-ключ).", LogKind.Warn);
+            var from = rejectFrom.Count > 0 ? " от " + string.Join(", ", rejectFrom) : "";
+            srv.Emit($"Запрос с неверным API-ключом отклонён{from} ({rejectsSinceNote} шт. с прошлого сообщения). У клиента старый ключ — выдайте ему текущий (Настройки → API-ключ).", LogKind.Warn);
             rejectNotedAt = DateTime.Now;
             rejectsSinceNote = 0;
+            rejectFrom.Clear();
         }
 
         void OnExited()
@@ -501,6 +512,7 @@ namespace QwenStudio
                 lastGpu = await Task.Run(gpu.Read);
                 RecordLive();
 
+                clients.Port = srv.Port > 0 && ServerUp ? srv.Port : cfg.Port;
                 if (ServerUp)
                 {
                     int port = srv.Port > 0 ? srv.Port : cfg.Port;
@@ -569,6 +581,27 @@ namespace QwenStudio
         }
 
         // ───────────────────────── UI refresh ─────────────────────────
+
+        /// <summary>Connection card «Клиенты»: who has a connection open now, else who was last; the tooltip lists 24 hours.</summary>
+        void UpdateClients()
+        {
+            var all = clients.All();
+            var open = all.Where(c => c.Open).ToList();
+            var now = DateTime.Now;
+            ClientsText.Text = open.Count > 0 ? string.Join(", ", open.Select(c => c.Short))
+                : all.Count > 0 ? $"сейчас нет · {all[0].Short} — {Ago(now - all[0].LastSeen)} назад"
+                : "пока никого";
+            Paint(ClientsText, TextBlock.ForegroundProperty, open.Count > 0 ? "Text" : "Muted");
+            Paint(ClientsDot, Shape.FillProperty, all.Any(c => c.Rejected > 0) ? "Warn" : open.Count > 0 ? "Good" : "Faint");
+            if (all.Count == 0) { ClientsRow.ToolTip = "Адреса программ, которые обращались к серверу модели, — за последние сутки."; return; }
+            var tip = new StringBuilder("За сутки (с запуска Qwen Studio):");
+            foreach (var c in all)
+            {
+                tip.Append($"\n{c.Title} — {(c.Open ? "подключён сейчас" : Ago(now - c.LastSeen) + " назад")}, впервые в {c.FirstSeen:HH:mm}");
+                if (c.Rejected > 0) tip.Append($" · неверный ключ: {c.Rejected}");
+            }
+            ClientsRow.ToolTip = tip.ToString();
+        }
 
         void UpdateUi()
         {
@@ -711,6 +744,7 @@ namespace QwenStudio
             var key = keyShown ? (string.IsNullOrEmpty(cfg.ApiKey) ? "— не задан —" : cfg.ApiKey) : Keys.Mask(cfg.ApiKey);
             KeyText.Text = key;
             KeyText2.Text = key;
+            UpdateClients();
 
             // images
             var aliasOf = srv.Profile ?? Chosen;
@@ -1306,21 +1340,10 @@ namespace QwenStudio
             Copy(text);
         }
 
-        /// <summary>
-        /// Clipboard.SetText throws CLIPBRD_E_CANT_OPEN when another app (clipboard manager, RDP) holds the clipboard
-        /// for a moment — often after the text is already in. Retry quietly instead of showing an error.
-        /// </summary>
-        static void Copy(string text)
+        /// <summary>Win32 copy, not WPF Clipboard: WPF's flush step froze the window for seconds under Parsec (see ClipboardText).</summary>
+        void Copy(string text)
         {
-            for (int i = 0; i < 6; i++)
-            {
-                try { Clipboard.SetDataObject(text, true); return; }
-                catch (COMException)
-                {
-                    try { if (Clipboard.GetText() == text) return; } catch (COMException) { }
-                    System.Threading.Thread.Sleep(50);
-                }
-            }
+            if (!ClipboardText.Set(text)) srv.Emit("Буфер обмена занят другой программой — не скопировано, попробуйте ещё раз.", LogKind.Warn);
         }
 
         void KeyEye_Click(object sender, RoutedEventArgs e) { keyShown = !keyShown; UpdateUi(); }

@@ -299,6 +299,7 @@
                                     <RowDefinition Height="{StaticResource RowHeight}"/>
                                     <RowDefinition Height="{StaticResource RowHeight}"/>
                                     <RowDefinition Height="{StaticResource RowHeight}"/>
+                                    <RowDefinition Height="{StaticResource RowHeight}"/>
                                 </Grid.RowDefinitions>
                                 <TextBlock Text="Локально" Style="{StaticResource Label}" VerticalAlignment="Center"/>
                                 <TextBlock x:Name="UrlLocal" Grid.Column="1" Style="{StaticResource MonoText}"/>
@@ -318,6 +319,12 @@
                                     <Button Style="{StaticResource IconBtn}" Content="&#xE7B3;" ToolTip="Показать / скрыть" Click="KeyEye_Click"/>
                                     <Button Style="{StaticResource IconBtn}" Content="&#xE8C8;" ToolTip="Копировать ключ" Click="KeyCopy_Click"/>
                                 </StackPanel>
+
+                                <TextBlock Grid.Row="4" Text="Клиенты" Style="{StaticResource Label}" VerticalAlignment="Center"/>
+                                <DockPanel x:Name="ClientsRow" Grid.Row="4" Grid.Column="1" Grid.ColumnSpan="2" Background="Transparent" ToolTipService.ShowDuration="60000">
+                                    <Ellipse x:Name="ClientsDot" Style="{StaticResource Dot}" VerticalAlignment="Center"/>
+                                    <TextBlock x:Name="ClientsText" Style="{StaticResource MonoText}" Margin="{StaticResource GapLeftS}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                                </DockPanel>
                             </Grid>
                         </StackPanel>
                     </Border>
