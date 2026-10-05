@@ -87,9 +87,9 @@ namespace QwenStudio.Core
                         var e = z.GetEntry(name);
                         long n = 0;
                         if (e != null) { using var s = e.Open(); var buf = new byte[1 << 16]; int r; while ((r = s.Read(buf, 0, buf.Length)) > 0) n += r; }
-                        if (n != len) { res.Errors.Add($"{name}: копия в архиве не совпала"); continue; }
+                        if (n != len) { res.Errors.Add(L.F("{0}: копия в архиве не совпала", name)); continue; }
                     }
-                    if (!Recycle(f)) { res.Errors.Add($"{name}: не удалось убрать в корзину"); continue; }
+                    if (!Recycle(f)) { res.Errors.Add(L.F("{0}: не удалось убрать в корзину", name)); continue; }
                     res.Files++; res.Bytes += len;
                 }
                 catch (Exception ex) { res.Errors.Add($"{Path.GetFileName(f)}: {ex.Message}"); }

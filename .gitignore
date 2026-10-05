@@ -14,3 +14,5 @@ logs/
 models/
 llama-b*/
 *.gguf
+todo.md
+plan.md

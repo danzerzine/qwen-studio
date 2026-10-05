@@ -38,7 +38,7 @@ namespace QwenStudio
         List<Profile> profiles = new();
         Profile selected;
 
-        readonly ObservableCollection<LogLine> log = new();
+        readonly BulkCollection<LogLine> log = new();
         readonly ObservableCollection<LogLine> events = new();
         readonly ConcurrentQueue<LogLine> incoming = new();
         ICollectionView logView;
@@ -48,8 +48,12 @@ namespace QwenStudio
         readonly Stopwatch clock = Stopwatch.StartNew();
         readonly List<DateTime> cudaRestarts = new();
         readonly Dictionary<Profile, Ellipse> profileDots = new();
-        bool polling, busy, keyShown, restarting, openWebWhenReady, closingForReal, warnedSlowStart, ledgerReady;
+        bool polling, probing, keyShown, restarting, openWebWhenReady, closingForReal, warnedSlowStart, ledgerReady;
         int tick;
+        /// <summary>Start/stop work in progress; a counter because Primary/Restart wrap Stop and StartProfile, which take it too.</summary>
+        int busyN;
+        bool busy => busyN > 0;
+        long lastUiMs;
         GpuSample lastGpu = new();
         int webStatus;           // 0 off, 1 starting, 2 ready
         readonly bool autostart;
@@ -79,8 +83,11 @@ namespace QwenStudio
         {
             this.autostart = autostart;
             Theme.Apply(Theme.Parse(ui.Get("THEME")));
+            L.Set(ui.Get("LANG"));
             InitializeComponent();
-            if (File.Exists(Paths.OpencodeDesktop)) TxtOpencodeKind.Text = "приложение для ПК";
+            L.Apply(this);
+            (L.En ? LangEn : LangRu).IsChecked = true;
+            if (File.Exists(Paths.OpencodeDesktop)) TxtOpencodeKind.Text = L.T("приложение для ПК");
             webui = new WebUi(cfg);
             images = new Images(cfg, gpu);
             Theme.Changed += OnThemeChanged;
@@ -102,21 +109,17 @@ namespace QwenStudio
             SourceInitialized += (_, _) => DarkTitleBar();
             Loaded += async (_, _) =>
             {
-                oldModel = ui.Get("MODEL") == "old";
+                model = Profile.ParseSlot(ui.Get("MODEL"));
                 // the toggles ask the models whether they can reason: read both headers once, off the UI thread
-                await Task.Run(() => { foreach (var k in new[] { "MODEL_PATH", "FALLBACK_MODEL_PATH" }) Gguf.Thinks(Paths.Resolve(cfg.Env.Get(k))); });
+                await Task.Run(() => { foreach (var k in new[] { "MODEL_PATH", "FALLBACK_MODEL_PATH", "UNCENSORED_MODEL_PATH" }) Gguf.Thinks(Paths.Resolve(cfg.Env.Get(k))); });
                 LoadProfiles();
                 srv.Attach(profiles, cfg.Port);
-                if (srv.Profile != null && srv.Profile.Old != oldModel) { oldModel = srv.Profile.Old; LoadProfiles(); }
-                (oldModel ? ModelOld : ModelMain).IsChecked = true;
-                // the "fallback model" switch only makes sense when a second model is configured
-                ModelOld.IsEnabled = oldModel || cfg.Env.Get("FALLBACK_MODEL_PATH") != "";
+                if (srv.Profile != null && srv.Profile.Slot != model) { model = srv.Profile.Slot; LoadProfiles(); }
+                ShowModels();
                 (ui.Get("CHART") == "live" ? ChartLive : ChartDay).IsChecked = true;
-                ModelMain.ToolTip = IOPath.GetFileName(cfg.Env.Get("MODEL_PATH"));
-                ModelOld.ToolTip = IOPath.GetFileName(cfg.Env.Get("FALLBACK_MODEL_PATH")) + " — запасная модель: без MTP, контекст до 96K";
                 if (srv.Profile != null) SelectVariant(srv.Profile);
                 FillSettings();
-                if (srv.State == ServerState.Stopped) srv.Emit($"Готово. Сервер остановлен · {profiles.Count} {(profiles.Count % 10 is >= 2 and <= 4 && profiles.Count % 100 is < 12 or > 14 ? "профиля" : profiles.Count % 10 == 1 && profiles.Count % 100 != 11 ? "профиль" : "профилей")} · {cfg.LanIp}");
+                if (srv.State == ServerState.Stopped) srv.Emit(L.F("Готово. Сервер остановлен · {0} {1} · {2}", profiles.Count, (profiles.Count % 10 is >= 2 and <= 4 && profiles.Count % 100 is < 12 or > 14 ? L.T("профиля") : profiles.Count % 10 == 1 && profiles.Count % 100 != 11 ? L.T("профиль") : L.T("профилей")), cfg.LanIp));
                 UpdateUi();
                 drainTimer.Start();
                 pollTimer.Start();
@@ -136,9 +139,10 @@ namespace QwenStudio
         async Task LoadLedger()
         {
             var fallback = IOPath.GetFileName(cfg.Env.Get("FALLBACK_MODEL_PATH"));
+            var uncensored = IOPath.GetFileName(cfg.Env.Get("UNCENSORED_MODEL_PATH"));
             var live = srv.Attached ? srv.LogFile : null;
-            try { await Task.Run(() => ledger.Load(fallback, live)); }
-            catch (Exception e) { srv.Emit("Учёт работы не прочитан: " + e.Message, LogKind.Warn); }
+            try { await Task.Run(() => ledger.Load(fallback, uncensored, live)); }
+            catch (Exception e) { srv.Emit(L.T("Учёт работы не прочитан: ") + e.Message, LogKind.Warn); }
             ledgerReady = true;
             foreach (var (at, gen) in pendingReq) ledger.Request(at, gen);
             foreach (var at in pendingRej) ledger.Reject(at);
@@ -146,7 +150,7 @@ namespace QwenStudio
             if (srv.Attached && ServerUp) ledger.Event("attach", srv.Profile, srv.Build, gpu.Driver, srv.Pid, srv.Since != default ? (DateTime.Now - srv.Since).TotalMinutes : 0);
             int rej = ledger.RejectedSince(DateTime.Now.AddHours(-24));
             if (rej > 0)
-                srv.Emit($"За сутки сервер отклонил {rej} запрос(ов) с неверным API-ключом — у какого-то клиента старый ключ.", LogKind.Warn);
+                srv.Emit(L.F("За сутки сервер отклонил {0} запрос(ов) с неверным API-ключом — у какого-то клиента старый ключ.", rej), LogKind.Warn);
             RenderChart();
             UpdateUi();
         }
@@ -167,8 +171,8 @@ namespace QwenStudio
             if (who != null) rejectFrom.Add(who.Title);
             // a client with a stale key retries a lot: one event per 30 minutes is enough
             if (DateTime.Now - rejectNotedAt < TimeSpan.FromMinutes(30)) return;
-            var from = rejectFrom.Count > 0 ? " от " + string.Join(", ", rejectFrom) : "";
-            srv.Emit($"Запрос с неверным API-ключом отклонён{from} ({rejectsSinceNote} шт. с прошлого сообщения). У клиента старый ключ — выдайте ему текущий (Настройки → API-ключ).", LogKind.Warn);
+            var from = rejectFrom.Count > 0 ? L.T(" от ") + string.Join(", ", rejectFrom) : "";
+            srv.Emit(L.F("Запрос с неверным API-ключом отклонён{0} ({1} шт. с прошлого сообщения). У клиента старый ключ — выдайте ему текущий (Настройки → API-ключ).", from, rejectsSinceNote), LogKind.Warn);
             rejectNotedAt = DateTime.Now;
             rejectsSinceNote = 0;
             rejectFrom.Clear();
@@ -195,7 +199,7 @@ namespace QwenStudio
         void LoadProfiles()
         {
             try { profiles = Profile.LoadAll(); }
-            catch (Exception e) { srv.Emit("profiles.json не читается: " + e.Message, LogKind.Error); profiles = new(); }
+            catch (Exception e) { srv.Emit(L.T("profiles.json не читается: ") + e.Message, LogKind.Error); profiles = new(); }
 
             ProfilesPanel.Children.Clear();
             profileDots.Clear();
@@ -207,14 +211,14 @@ namespace QwenStudio
                 profileDots[p] = dot;
                 var head = new StackPanel { Orientation = Orientation.Horizontal };
                 head.Children.Add(dot);
-                head.Children.Add(new TextBlock { Text = p.Name, Style = R<Style>("BodyStrong") });
+                head.Children.Add(new TextBlock { Text = L.T(p.Name), Style = R<Style>("BodyStrong") });
                 var body = new StackPanel();
                 body.Children.Add(head);
                 var badge = new TextBlock { Style = R<Style>("Label"), TextWrapping = TextWrapping.Wrap };
                 profileBadges[p] = badge;
                 body.Children.Add(badge);
                 var rb = new RadioButton { Style = R<Style>("ProfileCard"), GroupName = "profile", Content = body, Tag = p };
-                if (!string.IsNullOrWhiteSpace(p.Description)) rb.ToolTip = p.Description;
+                if (!string.IsNullOrWhiteSpace(p.Description)) rb.ToolTip = L.T(p.Description);
                 rb.Checked += (s, _) => { selected = (Profile)((RadioButton)s).Tag; SaveUiState(); ShowOptions(); UpdateUi(); };
                 ProfilesPanel.Children.Add(rb);
             }
@@ -222,10 +226,10 @@ namespace QwenStudio
             var last = ui.Get("PROFILE");
             var same = profiles.FirstOrDefault(p => p.Id == last);
             if (same != null) Select(same);
-            else if (Profile.Resolve(profiles, last, oldModel) is Profile former) SelectVariant(former);   // «Без размышлений» → «Чат» with thinking off
+            else if (Profile.Resolve(profiles, last, model) is Profile former) SelectVariant(former);   // «Без размышлений» → «Чат» with thinking off
             else Select(profiles.FirstOrDefault());
             ShowOptions();
-            ProfilesText.Text = $"profiles.json · {profiles.Count} шт.";
+            ProfilesText.Text = L.F("profiles.json · {0} шт.", profiles.Count);
         }
 
         void Select(Profile p)
@@ -250,7 +254,8 @@ namespace QwenStudio
             ShowOptions();
         }
 
-        bool oldModel;
+        /// <summary>The model switch: Profile.MainSlot, OldSlot or UncensoredSlot.</summary>
+        string model = Profile.MainSlot;
         bool showingOptions;
         readonly Dictionary<Profile, TextBlock> profileBadges = new();
 
@@ -259,7 +264,7 @@ namespace QwenStudio
 
         /// <summary>A mode on the selected model with its remembered toggles; what the mode or the model cannot do is off.</summary>
         Profile VariantOf(Profile p) =>
-            p.Variant(oldModel, SeeBlock(p) == null && Wants(p, "VISION", p.VisionByDefault), ThinkBlock() == null && Wants(p, "THINK", p.ThinksByDefault));
+            p.Variant(model, SeeBlock(p) == null && Wants(p, "VISION", p.VisionByDefault), ThinkBlock() == null && Wants(p, "THINK", p.ThinksByDefault));
 
         bool Wants(Profile p, string option, bool byDefault) => ui.Get(option + "_" + p.Id) switch { "1" => true, "0" => false, _ => byDefault };
 
@@ -267,17 +272,17 @@ namespace QwenStudio
         string SeeBlock(Profile p)
         {
             if (string.IsNullOrEmpty(p.Mmproj))
-                return $"В режиме «{p.Name}» зрение не предусмотрено: модулю зрения (~1 ГБ) не хватит видеопамяти рядом с его контекстом.";
+                return L.F("В режиме «{0}» зрение не предусмотрено: модулю зрения (~1 ГБ) не хватит видеопамяти рядом с его контекстом.", L.T(p.Name));
             var file = cfg.MmprojFile(p);
-            return File.Exists(file) ? null : $"Не найден модуль зрения:\n{file}\n\nУкажите путь в «Настройки → Сервер и модели».";
+            return File.Exists(file) ? null : L.F("Не найден модуль зрения:\n{0}\n\nУкажите путь в «Настройки → Сервер и модели».", file);
         }
 
         /// <summary>Why the selected model cannot reason, or null when it can (or it is not known: the model file is missing).</summary>
         string ThinkBlock()
         {
-            var model = Paths.Resolve(cfg.Env.Get(oldModel ? "FALLBACK_MODEL_PATH" : "MODEL_PATH"));
-            return Gguf.Thinks(model) == false
-                ? $"Модель {IOPath.GetFileName(model)} не умеет размышлять: в её шаблоне чата нет режима размышлений."
+            var file = Paths.Resolve(cfg.Env.Get(Profile.ModelKeyOf(model)));
+            return Gguf.Thinks(file) == false
+                ? L.F("Модель {0} не умеет размышлять: в её шаблоне чата нет режима размышлений.", IOPath.GetFileName(file))
                 : null;
         }
 
@@ -290,11 +295,11 @@ namespace QwenStudio
             var see = SeeBlock(selected);
             VisionToggle.IsEnabled = see == null;
             VisionToggle.IsChecked = see == null && Wants(selected, "VISION", selected.VisionByDefault);
-            VisionToggle.ToolTip = see ?? "Модель понимает картинки: скриншоты, документы, фото. Модуль зрения занимает ещё ~1 ГБ видеопамяти.";
+            VisionToggle.ToolTip = see ?? L.T("Модель понимает картинки: скриншоты, документы, фото. Модуль зрения занимает ещё ~1 ГБ видеопамяти.");
             var think = ThinkBlock();
             ThinkToggle.IsEnabled = think == null;
             ThinkToggle.IsChecked = think == null && Wants(selected, "THINK", selected.ThinksByDefault);
-            ThinkToggle.ToolTip = think ?? "Модель размышляет перед ответом: точнее на сложных задачах, но отвечает дольше. Без размышлений — ответ сразу: перевод, короткие ответы, пакетные прогоны.";
+            ThinkToggle.ToolTip = think ?? L.T("Модель размышляет перед ответом: точнее на сложных задачах, но отвечает дольше. Без размышлений — ответ сразу: перевод, короткие ответы, пакетные прогоны.");
             showingOptions = false;
         }
 
@@ -309,12 +314,38 @@ namespace QwenStudio
 
         void Model_Checked(object sender, RoutedEventArgs e)
         {
-            bool old = sender == ModelOld;
-            if (old == oldModel || !IsLoaded) return;
-            oldModel = old;
-            try { ui.Set("MODEL", old ? "old" : "main"); } catch { }
+            var slot = sender == ModelOld ? Profile.OldSlot : sender == ModelUncensored ? Profile.UncensoredSlot : Profile.MainSlot;
+            if (slot == model || !IsLoaded || showingModels) return;
+            model = slot;
+            try { ui.Set("MODEL", slot); } catch { }
             LoadProfiles();                    // badges change: no MTP, 96K cap
             UpdateUi();
+        }
+
+        bool showingModels;
+
+        /// <summary>
+        /// Model switch: checks the current slot, file names in the tooltips. The uncensored tab is off until its file is set
+        /// in Settings (the reason is in its tooltip); a server running on it keeps the tab on regardless.
+        /// </summary>
+        void ShowModels()
+        {
+            showingModels = true;
+            ModelMain.ToolTip = IOPath.GetFileName(cfg.Env.Get("MODEL_PATH"));
+            ModelOld.ToolTip = IOPath.GetFileName(cfg.Env.Get("FALLBACK_MODEL_PATH")) + L.T(" — запасная модель, без MTP, контекст до 96K");
+            // the fallback switch only makes sense when a second model is configured
+            ModelOld.IsEnabled = model == Profile.OldSlot || cfg.Env.Get("FALLBACK_MODEL_PATH") != "";
+            var path = cfg.Env.Get("UNCENSORED_MODEL_PATH");
+            bool has = path != "" && File.Exists(Paths.Resolve(path));
+            bool runs = srv.Profile?.Slot == Profile.UncensoredSlot && ServerUp;
+            ModelUncensored.IsEnabled = has || runs;
+            ModelUncensored.ToolTip = has
+                ? IOPath.GetFileName(path) + L.T(" — основная модель, дообученная без отказов: тот же сервер, MTP и режимы")
+                : path == "" ? L.T("Модель без цензуры не выбрана: укажите файл в «Настройки → Сервер и модели».")
+                : L.F("Не найден файл модели без цензуры:\n{0}\n\nУкажите путь в «Настройки → Сервер и модели».", Paths.Resolve(path));
+            if (!ModelUncensored.IsEnabled && model == Profile.UncensoredSlot) { model = Profile.MainSlot; LoadProfiles(); }
+            (model == Profile.OldSlot ? ModelOld : model == Profile.UncensoredSlot ? ModelUncensored : ModelMain).IsChecked = true;
+            showingModels = false;
         }
 
         void SaveUiState() { try { if (selected != null && ui.Get("PROFILE") != selected.Id) ui.Set("PROFILE", selected.Id); } catch { } }
@@ -330,29 +361,45 @@ namespace QwenStudio
         async void Primary_Click(object sender, RoutedEventArgs e)
         {
             if (busy || selected == null) return;
-            if (!ServerUp) { await StartProfile(Chosen, checks: true); return; }
-            // switch to the selected mode
-            if (srv.State == ServerState.External &&
-                !Ask($"На порту {cfg.Port} работает llama-server, запущенный не из Qwen Studio. Остановить его и запустить «{Chosen.Title}»?")) return;
-            if (!await ConfirmInterrupt($"Переключить сервер на «{Chosen.Title}»")) return;
-            await Stop("switch");
-            await StartProfile(Chosen, checks: false);
+            busyN++; UpdateUi();
+            try
+            {
+                if (!ServerUp) { await StartProfile(Chosen, checks: true); return; }
+                // switch to the selected mode
+                if (srv.State == ServerState.External &&
+                    !Ask(L.F("На порту {0} работает llama-server, запущенный не из Qwen Studio. Остановить его и запустить «{1}»?", cfg.Port, Chosen.Title))) return;
+                if (!await ConfirmInterrupt(L.F("Переключить сервер на «{0}»", Chosen.Title))) return;
+                await Stop("switch");
+                await StartProfile(Chosen, checks: false);
+            }
+            finally { busyN--; UpdateUi(); }
         }
 
         async void Stop_Click(object sender, RoutedEventArgs e)
         {
             if (busy || !ServerUp) return;
-            if (!await ConfirmInterrupt("Остановить сервер")) return;
-            await Stop("user");
+            busyN++; UpdateUi();
+            try
+            {
+                if (!await ConfirmInterrupt(L.T("Остановить сервер"))) return;
+                await Stop("user");
+            }
+            finally { busyN--; UpdateUi(); }
         }
 
         async void Restart_Click(object sender, RoutedEventArgs e)
         {
             if (busy || srv.Profile == null) return;
-            if (!await ConfirmInterrupt("Перезапустить сервер")) return;
-            var p = srv.Profile;
-            await Stop("restart");
-            await StartProfile(p, checks: false);
+            busyN++; UpdateUi();
+            try
+            {
+                if (!await ConfirmInterrupt(L.T("Перезапустить сервер"))) return;
+                var p = srv.Profile;
+                if (p == null) return;
+                await Stop("restart");
+                await StartProfile(p, checks: false);
+            }
+            finally { busyN--; UpdateUi(); }
         }
 
         /// <summary>
@@ -365,87 +412,92 @@ namespace QwenStudio
             int port = srv.Port > 0 ? srv.Port : cfg.Port;
             await activity.Poll(port, cfg.ApiKey);
             if (activity.Busy > 0)
-                return Ask($"Сервер сейчас обрабатывает запросы: занято {activity.Busy} из {activity.Slots} слотов. Они оборвутся на середине.\n\n{action}?");
+                return Ask(L.F("Сервер сейчас обрабатывает запросы: занято {0} из {1} слотов. Они оборвутся на середине.\n\n{2}?", activity.Busy, activity.Slots, action));
             var last = new[] { activity.LastBusy, srv.LastDone }.Max();
             if (last is DateTime t && DateTime.Now - t < RecentWork)
-                return Ask($"Последний запрос закончился {Ago(DateTime.Now - t)} назад — клиент (например, пакетный прогон) может прислать следующий в любую секунду.\n\n{action}?");
+                return Ask(L.F("Последний запрос закончился {0} назад — клиент (например, пакетный прогон) может прислать следующий в любую секунду.\n\n{1}?", Ago(DateTime.Now - t), action));
             return true;
         }
 
         async Task Stop(string reason)
         {
-            busy = true; UpdateUi();
-            LedgerEvent("stop", srv.Profile, reason);
-            srv.Emit("Останавливаю сервер…");
-            await srv.Stop();
-            activity.Reset();
-            srv.Emit("Сервер остановлен, видеопамять освобождена.");
-            busy = false; UpdateUi();
+            busyN++; UpdateUi();
+            try
+            {
+                LedgerEvent("stop", srv.Profile, reason);
+                srv.Emit(L.T("Останавливаю сервер…"));
+                await srv.Stop();
+                activity.Reset();
+                srv.Emit(L.T("Сервер остановлен, видеопамять освобождена."));
+            }
+            finally { busyN--; UpdateUi(); }
         }
 
         /// <summary>auto: launched by autostart — no dialogs; any obstacle becomes an event and the start is skipped.</summary>
         async Task StartProfile(Profile p, bool checks, bool auto = false)
         {
-            busy = true; UpdateUi();
+            busyN++; UpdateUi();
             void Fail(string text)
             {
-                if (auto) { srv.Emit("Автозапуск пропущен: " + text.Replace("\n\n", " "), LogKind.Warn); LedgerEvent("autostart_skip", p, text); }
+                if (auto) { srv.Emit(L.T("Автозапуск пропущен: ") + text.Replace("\n\n", " "), LogKind.Warn); LedgerEvent("autostart_skip", p, text); }
                 else Error(text);
             }
             try
             {
                 cfg.Env.Load();
                 string exe = cfg.ServerExe(p), model = cfg.ModelFile(p);
-                if (!File.Exists(exe)) { Fail($"Не найден llama-server:\n{exe}\n\nУкажите путь в «Настройки → Сервер и модели»."); return; }
-                if (!File.Exists(model)) { Fail($"Не найдена модель:\n{model}\n\nУкажите путь в «Настройки → Сервер и модели»."); return; }
+                if (!File.Exists(exe)) { Fail(L.F("Не найден llama-server:\n{0}\n\nУкажите путь в «Настройки → Сервер и модели».", exe)); return; }
+                if (!File.Exists(model)) { Fail(L.F("Не найдена модель:\n{0}\n\nУкажите путь в «Настройки → Сервер и модели».", model)); return; }
                 string mmproj = cfg.MmprojFile(p);
-                if (mmproj != null && !File.Exists(mmproj)) { Fail($"Не найден модуль зрения:\n{mmproj}\n\nУкажите путь в «Настройки → Сервер и модели»."); return; }
+                if (mmproj != null && !File.Exists(mmproj)) { Fail(L.F("Не найден модуль зрения:\n{0}\n\nУкажите путь в «Настройки → Сервер и модели».", mmproj)); return; }
+                if (cfg.OnLan && string.IsNullOrEmpty(cfg.ApiKey))
+                { Fail(L.T("Сервер открыт для локальной сети, но API-ключ не задан — моделью мог бы пользоваться любой в сети.\n\nСоздайте ключ: «Настройки → Новый ключ…».")); return; }
 
                 var ollama = await Neighbours.OllamaModels();
                 if (ollama.Count > 0)
                 {
-                    if (auto) { Fail($"Ollama держит в видеопамяти: {string.Join(", ", ollama)}"); return; }
-                    if (!Ask($"Ollama держит в видеопамяти: {string.Join(", ", ollama)}.\n\nДве модели на одной карте мешают друг другу. Выгрузить их из Ollama и продолжить?")) return;
-                    srv.Emit("Выгружаю модели Ollama…");
+                    if (auto) { Fail(L.F("Ollama держит в видеопамяти: {0}", string.Join(", ", ollama))); return; }
+                    if (!Ask(L.F("Ollama держит в видеопамяти: {0}.\n\nДве модели на одной карте мешают друг другу. Выгрузить их из Ollama и продолжить?", string.Join(", ", ollama)))) return;
+                    srv.Emit(L.T("Выгружаю модели Ollama…"));
                     await Neighbours.UnloadOllama(ollama);
                 }
                 if (await Neighbours.LmStudioBusy())
                 {
-                    if (auto) { Fail("запущен сервер LM Studio"); return; }
-                    if (!Ask("Запущен сервер LM Studio — его модели тоже могут занимать видеопамять.\n\nВыгрузить модели LM Studio и продолжить?")) return;
-                    srv.Emit("Выгружаю модели LM Studio…");
+                    if (auto) { Fail(L.T("запущен сервер LM Studio")); return; }
+                    if (!Ask(L.T("Запущен сервер LM Studio — его модели тоже могут занимать видеопамять.\n\nВыгрузить модели LM Studio и продолжить?"))) return;
+                    srv.Emit(L.T("Выгружаю модели LM Studio…"));
                     await Neighbours.UnloadLmStudio();
                 }
                 if (images.Installed)
                 {
                     await images.Probe();
-                    if (images.Generating) { Fail("ComfyUI сейчас рисует картинку.\n\nДождитесь конца генерации и запустите сервер снова."); return; }
+                    if (images.Generating) { Fail(L.T("ComfyUI сейчас рисует картинку.\n\nДождитесь конца генерации и запустите сервер снова.")); return; }
                     // card-wide memory: only ComfyUI's while our server is down (a running server gets stopped below anyway)
                     if (!ServerUp && images.HeldMiB >= Images.HeldThresholdMiB)
                     {
-                        if (auto) { Fail($"ComfyUI держит в видеопамяти модели картинок ({images.HeldMiB / 1024.0:0.0} ГБ)"); return; }
-                        if (!Ask($"ComfyUI держит в видеопамяти модели картинок: {images.HeldMiB / 1024.0:0.0} ГБ.\n\nВыгрузить их и продолжить? Картинки останутся запущены — модель загрузится заново при следующей генерации, и тогда сервер Qwen нужно будет остановить.")) return;
-                        srv.Emit("Выгружаю модели ComfyUI из видеопамяти…");
+                        if (auto) { Fail(L.F("ComfyUI держит в видеопамяти модели картинок ({0:0.0} ГБ)", images.HeldMiB / 1024.0)); return; }
+                        if (!Ask(L.F("ComfyUI держит в видеопамяти модели картинок: {0:0.0} ГБ.\n\nВыгрузить их и продолжить? Картинки останутся запущены — модель загрузится заново при следующей генерации, и тогда сервер Qwen нужно будет остановить.", images.HeldMiB / 1024.0))) return;
+                        srv.Emit(L.T("Выгружаю модели ComfyUI из видеопамяти…"));
                         await images.FreeVram();
                     }
                 }
                 if (ServerUp)
                 {
-                    if (auto) { Fail("сервер уже работает"); return; }
-                    if (srv.State == ServerState.External && !Ask($"На порту {cfg.Port} уже работает llama-server, запущенный не отсюда. Остановить его и запустить выбранный профиль?")) return;
+                    if (auto) { Fail(L.T("сервер уже работает")); return; }
+                    if (srv.State == ServerState.External && !Ask(L.F("На порту {0} уже работает llama-server, запущенный не отсюда. Остановить его и запустить выбранный профиль?", cfg.Port))) return;
                     LedgerEvent("stop", srv.Profile, "switch");
                     await srv.Stop();
                 }
                 var owner = ServerManager.PortOwnerName(cfg.Port);
-                if (owner != null) { Fail($"Порт {cfg.Port} занят программой «{owner}».\n\nОсвободите его или смените порт в «Настройки → Сеть»."); return; }
+                if (owner != null) { Fail(L.F("Порт {0} занят программой «{1}».\n\nОсвободите его или смените порт в «Настройки → Сеть».", cfg.Port, owner)); return; }
                 if (checks || auto)
                 {
                     await Task.Delay(300);
                     var g = await Task.Run(gpu.Read);
                     if (g.Ok && g.UsedMiB > 1500)
                     {
-                        if (auto) { Fail($"на видеокарте уже занято {g.UsedMiB / 1024:0.0} ГБ другими программами"); return; }
-                        if (!Ask($"На видеокарте уже занято {g.UsedMiB / 1024:0.0} ГБ другими программами, а модели нужно около 15 ГБ.\n\nВсё равно запустить?")) return;
+                        if (auto) { Fail(L.F("на видеокарте уже занято {0:0.0} ГБ другими программами", g.UsedMiB / 1024)); return; }
+                        if (!Ask(L.F("На видеокарте уже занято {0:0.0} ГБ другими программами, а модели нужно около 15 ГБ.\n\nВсё равно запустить?", g.UsedMiB / 1024))) return;
                     }
                 }
 
@@ -456,13 +508,14 @@ namespace QwenStudio
                 try { ui.Set("LAST_START", p.Key); } catch { }
             }
             catch (Exception ex) { Fail(ex.Message); }
-            finally { busy = false; UpdateUi(); }
+            finally { busyN--; UpdateUi(); }
         }
 
         async void OnCudaError()
         {
-            if (restarting || srv.Profile == null) return;
+            if (restarting || busy || srv.Profile == null) return;
             restarting = true;
+            busyN++; UpdateUi();
             lastCudaAt = DateTime.Now;
             try
             {
@@ -471,16 +524,16 @@ namespace QwenStudio
                 cudaRestarts.RemoveAll(t => DateTime.Now - t > TimeSpan.FromMinutes(10));
                 if (cudaRestarts.Count >= 2)
                 {
-                    srv.Emit("Снова ошибка CUDA — автоперезапуск отключён. Проверьте журнал; возможна нестабильность видеокарты.", LogKind.Error);
+                    srv.Emit(L.T("Снова ошибка CUDA — автоперезапуск отключён. Проверьте журнал; возможна нестабильность видеокарты."), LogKind.Error);
                     return;
                 }
                 cudaRestarts.Add(DateTime.Now);
-                srv.Emit("Ошибка CUDA — перезапускаю сервер через 3 секунды…", LogKind.Warn);
+                srv.Emit(L.T("Ошибка CUDA — перезапускаю сервер через 3 секунды…"), LogKind.Warn);
                 await srv.Stop();
                 await Task.Delay(3000);
                 await StartProfile(p, checks: false);
             }
-            finally { restarting = false; }
+            finally { restarting = false; busyN--; UpdateUi(); }
         }
 
         /// <summary>
@@ -491,12 +544,12 @@ namespace QwenStudio
         {
             if (ui.Get("AUTOSTART_SERVER") != "1") return;
             var p = Profile.FromKey(profiles, ui.Get("LAST_START"));
-            if (p == null) { srv.Emit("Автозапуск: сервер ещё ни разу не запускался из Qwen Studio — нечего поднимать.", LogKind.Warn); return; }
-            if (ServerUp) { srv.Emit("Автозапуск: сервер уже работает."); return; }
-            srv.Emit($"Автозапуск: через 20 с подниму «{p.Title}», если видеокарта свободна.");
+            if (p == null) { srv.Emit(L.T("Автозапуск: сервер ещё ни разу не запускался из Qwen Studio — нечего поднимать."), LogKind.Warn); return; }
+            if (ServerUp) { srv.Emit(L.T("Автозапуск: сервер уже работает.")); return; }
+            srv.Emit(L.F("Автозапуск: через 20 с подниму «{0}», если видеокарта свободна.", p.Title));
             await Task.Delay(TimeSpan.FromSeconds(20));
             for (int i = 0; i < 24 && !(await Task.Run(gpu.Read)).Ok; i++) await Task.Delay(TimeSpan.FromSeconds(5));
-            if (ServerUp || busy) { srv.Emit("Автозапуск отменён: сервер уже запущен."); return; }
+            if (ServerUp || busy) { srv.Emit(L.T("Автозапуск отменён: сервер уже запущен.")); return; }
             await StartProfile(p, checks: false, auto: true);
         }
 
@@ -511,41 +564,7 @@ namespace QwenStudio
             {
                 lastGpu = await Task.Run(gpu.Read);
                 RecordLive();
-
-                clients.Port = srv.Port > 0 && ServerUp ? srv.Port : cfg.Port;
-                if (ServerUp)
-                {
-                    int port = srv.Port > 0 ? srv.Port : cfg.Port;
-                    int code = await Http.Status($"http://127.0.0.1:{port}/health");
-                    if (code == 200 && srv.State == ServerState.Starting)
-                    {
-                        srv.MarkRunning();
-                        if (srv.Attached)
-                            srv.Emit($"Сервер отвечает · работает уже {Elapsed(DateTime.Now - srv.Since)} · {cfg.LanIp}:{port}", LogKind.Good);
-                        else
-                        {
-                            srv.Emit($"Готов к работе за {Elapsed(DateTime.Now - srv.Since)} · {cfg.LanIp}:{port}", LogKind.Good);
-                            LedgerEvent("ready", srv.Profile, $"load {(DateTime.Now - srv.Since).TotalSeconds:0}s");
-                        }
-                    }
-                    if (srv.State == ServerState.Starting && !warnedSlowStart && DateTime.Now - srv.Since > TimeSpan.FromMinutes(10))
-                    {
-                        warnedSlowStart = true;
-                        srv.Emit("Сервер не отвечает уже 10 минут — проверьте журнал.", LogKind.Warn);
-                    }
-                    if (code == 200 && srv.State is ServerState.Running or ServerState.External)
-                        await activity.Poll(port, cfg.ApiKey);
-                    if (srv.State == ServerState.External && tick % 2 == 0 && Net.PortOwner(port) == 0)
-                    {
-                        await srv.Stop();
-                        activity.Reset();
-                    }
-                }
-                else
-                {
-                    if (activity.Ok) activity.Reset();
-                    if (tick % 3 == 0 && !busy && Net.PortOwner(cfg.Port) != 0) srv.Attach(profiles, cfg.Port);
-                }
+                if (!probing) Probe(tick);
 
                 if (ledgerReady)
                 {
@@ -558,6 +577,54 @@ namespace QwenStudio
                     }
                 }
                 if (tick % 3600 == 0 && DateTime.Now - lastArchive > TimeSpan.FromHours(23)) _ = ArchiveLogs(manual: false);
+            }
+            finally
+            {
+                polling = false;
+                UpdateUi();
+            }
+        }
+
+        /// <summary>Health, slots, attach, ComfyUI and Open WebUI probes: a slow answer delays only the next probe, not sampling.</summary>
+        async void Probe(int tick)
+        {
+            probing = true;
+            try
+            {
+                clients.Port = srv.Port > 0 && ServerUp ? srv.Port : cfg.Port;
+                if (ServerUp)
+                {
+                    int port = srv.Port > 0 ? srv.Port : cfg.Port;
+                    int code = await Http.Status($"http://127.0.0.1:{port}/health");
+                    if (code == 200 && srv.State == ServerState.Starting)
+                    {
+                        srv.MarkRunning();
+                        if (srv.Attached)
+                            srv.Emit(L.F("Сервер отвечает · работает уже {0} · {1}:{2}", Elapsed(DateTime.Now - srv.Since), cfg.LanIp, port), LogKind.Good);
+                        else
+                        {
+                            srv.Emit(L.F("Готов к работе за {0} · {1}:{2}", Elapsed(DateTime.Now - srv.Since), cfg.LanIp, port), LogKind.Good);
+                            LedgerEvent("ready", srv.Profile, $"load {(DateTime.Now - srv.Since).TotalSeconds:0}s");
+                        }
+                    }
+                    if (srv.State == ServerState.Starting && !warnedSlowStart && DateTime.Now - srv.Since > TimeSpan.FromMinutes(10))
+                    {
+                        warnedSlowStart = true;
+                        srv.Emit(L.T("Сервер не отвечает уже 10 минут — проверьте журнал."), LogKind.Warn);
+                    }
+                    if (code == 200 && srv.State is ServerState.Running or ServerState.External)
+                        await activity.Poll(port, cfg.ApiKey);
+                    if (srv.State == ServerState.External && tick % 2 == 0 && !busy && Net.PortOwner(port) == 0)
+                    {
+                        await srv.Stop();
+                        activity.Reset();
+                    }
+                }
+                else
+                {
+                    if (activity.Ok) activity.Reset();
+                    if (tick % 3 == 0 && !busy && Net.PortOwner(cfg.Port) != 0) srv.Attach(profiles, cfg.Port);
+                }
 
                 if (tick % 3 == 1 && images.Installed && !imagesBusy) await images.Probe();
 
@@ -569,13 +636,13 @@ namespace QwenStudio
                     if (webStatus == 0 && openWebWhenReady && clock.Elapsed.TotalSeconds > webStartAt + 20)
                     {
                         openWebWhenReady = false;
-                        srv.Emit("Open WebUI не запустился — см. журнал " + webui.LogFile, LogKind.Error);
+                        srv.Emit(L.T("Open WebUI не запустился — см. журнал ") + webui.LogFile, LogKind.Error);
                     }
                 }
             }
             finally
             {
-                polling = false;
+                probing = false;
                 UpdateUi();
             }
         }
@@ -589,16 +656,16 @@ namespace QwenStudio
             var open = all.Where(c => c.Open).ToList();
             var now = DateTime.Now;
             ClientsText.Text = open.Count > 0 ? string.Join(", ", open.Select(c => c.Short))
-                : all.Count > 0 ? $"сейчас нет · {all[0].Short} — {Ago(now - all[0].LastSeen)} назад"
-                : "пока никого";
+                : all.Count > 0 ? L.F("сейчас нет · {0} — {1} назад", all[0].Short, Ago(now - all[0].LastSeen))
+                : L.T("пока никого");
             Paint(ClientsText, TextBlock.ForegroundProperty, open.Count > 0 ? "Text" : "Muted");
             Paint(ClientsDot, Shape.FillProperty, all.Any(c => c.Rejected > 0) ? "Warn" : open.Count > 0 ? "Good" : "Faint");
-            if (all.Count == 0) { ClientsRow.ToolTip = "Адреса программ, которые обращались к серверу модели, — за последние сутки."; return; }
-            var tip = new StringBuilder("За сутки (с запуска Qwen Studio):");
+            if (all.Count == 0) { ClientsRow.ToolTip = L.T("Адреса программ, которые обращались к серверу модели, — за последние сутки."); return; }
+            var tip = new StringBuilder(L.T("За сутки (с запуска Qwen Studio):"));
             foreach (var c in all)
             {
-                tip.Append($"\n{c.Title} — {(c.Open ? "подключён сейчас" : Ago(now - c.LastSeen) + " назад")}, впервые в {c.FirstSeen:HH:mm}");
-                if (c.Rejected > 0) tip.Append($" · неверный ключ: {c.Rejected}");
+                tip.Append(L.F("\n{0} — {1}, впервые в {2:HH:mm}", c.Title, (c.Open ? L.T("подключён сейчас") : Ago(now - c.LastSeen) + L.T(" назад")), c.FirstSeen));
+                if (c.Rejected > 0) tip.Append(L.F(" · неверный ключ: {0}", c.Rejected));
             }
             ClientsRow.ToolTip = tip.ToString();
         }
@@ -612,13 +679,13 @@ namespace QwenStudio
             // hero: state
             (string text, string brush, string sub) s = st switch
             {
-                ServerState.Starting => ("Загружается…", "Warn", $"{running?.Title ?? "профиль"} · {Elapsed(now - srv.Since)}"),
-                ServerState.Running => ("Работает", "Good", string.Join(" · ", new[] { running?.ModelTitle, running?.Badge, srv.Build, "работает " + Elapsed(now - srv.Since) }.Where(x => !string.IsNullOrEmpty(x)))),
-                ServerState.External => ("Работает (внешний)", "Warn", $"llama-server PID {srv.Pid} запущен не из Qwen Studio" + (srv.Build != null ? " · " + srv.Build : "")),
-                ServerState.Crashed => ("Упал", "Bad", $"{running?.Title} · {srv.ExitInfo} · подробности во вкладке «Журнал»"),
-                _ => ("Остановлен", "Muted", "выберите режим слева и запустите"),
+                ServerState.Starting => (L.T("Загружается…"), "Warn", $"{running?.Title ?? L.T("профиль")} · {Elapsed(now - srv.Since)}"),
+                ServerState.Running => (L.T("Работает"), "Good", string.Join(" · ", new[] { running?.ModelTitle, running?.Badge, srv.Build, L.T("работает ") + Elapsed(now - srv.Since) }.Where(x => !string.IsNullOrEmpty(x)))),
+                ServerState.External => (L.T("Работает (внешний)"), "Warn", L.F("llama-server PID {0} запущен не из Qwen Studio", srv.Pid) + (srv.Build != null ? " · " + srv.Build : "")),
+                ServerState.Crashed => (L.T("Упал"), "Bad", L.F("{0} · {1} · подробности во вкладке «Журнал»", running?.Title, srv.ExitInfo)),
+                _ => (L.T("Остановлен"), "Muted", L.T("выберите режим слева и запустите")),
             };
-            if (busy && !ServerUp) s = ("Подготовка…", "Warn", "проверяю видеокарту и соседей");
+            if (busy && !ServerUp) s = (L.T("Подготовка…"), "Warn", L.T("проверяю видеокарту и соседей"));
             StateText.Text = s.text;
             Paint(StateText, TextBlock.ForegroundProperty, s.brush);
             StateSub.Text = s.sub;
@@ -626,11 +693,11 @@ namespace QwenStudio
             Paint(PillDot, Shape.FillProperty, s.brush == "Muted" ? "Faint" : s.brush);
             PillText.Text = st switch
             {
-                ServerState.Running => $"Работает · {running?.Title}",
-                ServerState.Starting => "Загружается…",
-                ServerState.External => "Работает (внешний)",
-                ServerState.Crashed => "Сервер упал",
-                _ => "Сервер остановлен",
+                ServerState.Running => L.F("Работает · {0}", running?.Title),
+                ServerState.Starting => L.T("Загружается…"),
+                ServerState.External => L.T("Работает (внешний)"),
+                ServerState.Crashed => L.T("Сервер упал"),
+                _ => L.T("Сервер остановлен"),
             };
 
             // activity chip
@@ -641,62 +708,64 @@ namespace QwenStudio
                 var lastWork = new[] { activity.LastBusy, srv.LastDone }.Max();
                 if (!activity.Ok)
                 {
-                    ActivityText.Text = "нет данных о слотах";
+                    ActivityText.Text = L.T("нет данных о слотах");
                     Paint(ActivityChip, Border.BackgroundProperty, "Surface2");
                     Paint(ActivityDot, Shape.FillProperty, "Faint");
                 }
                 else if (activity.Busy > 0)
                 {
-                    ActivityText.Text = $"Занято {activity.Busy} из {activity.Slots}";
+                    ActivityText.Text = L.F("Занято {0} из {1}", activity.Busy, activity.Slots);
                     Paint(ActivityChip, Border.BackgroundProperty, "AccentSoft");
                     Paint(ActivityDot, Shape.FillProperty, "Accent");
                 }
                 else
                 {
-                    ActivityText.Text = lastWork is DateTime lw ? $"Свободен · последний запрос {Ago(now - lw)} назад" : $"Свободен · {activity.Slots} слот(а)";
+                    ActivityText.Text = lastWork is DateTime lw ? L.F("Свободен · последний запрос {0} назад", Ago(now - lw)) : L.F("Свободен · {0} слот(а)", activity.Slots);
                     Paint(ActivityChip, Border.BackgroundProperty, "Surface2");
                     Paint(ActivityDot, Shape.FillProperty, lastWork is DateTime r && now - r < RecentWork ? "Warn" : "Good");
                 }
                 ActivityChip.ToolTip = lastWork is DateTime t2 && now - t2 < RecentWork && activity.Busy == 0
-                    ? "Запрос закончился меньше 2 минут назад — остановка и перезапуск спросят подтверждение" : null;
+                    ? L.T("Запрос закончился меньше 2 минут назад — остановка и перезапуск спросят подтверждение") : null;
             }
 
             // metrics
-            AggTps.Text = activity.AggTps is double a ? $"{a:0.0} т/с" : serving && activity.Ok ? "0 т/с" : "—";
-            AggSub.Text = activity.Busy > 0 ? $"{activity.Busy} из {activity.Slots} слотов генерируют" : "все слоты вместе";
-            GenTps.Text = srv.GenTps is double g ? $"{g:0.0} т/с" : "—";
+            AggTps.Text = activity.AggTps is double a ? L.F("{0:0.0} т/с", a) : serving && activity.Ok ? L.T("0 т/с") : "—";
+            AggSub.Text = activity.Busy > 0 ? L.F("{0} из {1} слотов генерируют", activity.Busy, activity.Slots) : L.T("все слоты вместе");
+            GenTps.Text = srv.GenTps is double g ? L.F("{0:0.0} т/с", g) : "—";
             var parts = new List<string>();
-            if (srv.PromptTps is double pp) parts.Add($"промпт {pp:0} т/с");
+            if (srv.PromptTps is double pp) parts.Add(L.F("промпт {0:0} т/с", pp));
             if (srv.DraftAccept is double d) parts.Add($"MTP {(d <= 1 ? d * 100 : d):0}%");
-            else if (running?.Mtp == false) parts.Add("MTP выкл");
-            LastSub.Text = parts.Count > 0 ? string.Join(" · ", parts) : "запросов ещё не было";
+            else if (running?.Mtp == false) parts.Add(L.T("MTP выкл"));
+            LastSub.Text = parts.Count > 0 ? string.Join(" · ", parts) : L.T("запросов ещё не было");
             if (ledgerReady)
             {
                 ReqHour.Text = ledger.RequestsSince(now.AddHours(-1)).ToString("N0");
-                var sub = $"за сутки {ledger.RequestsSince(now.AddHours(-24)):N0}";
-                if (ServerUp && srv.Since != default) sub += $" · сессия {ledger.RequestsSince(srv.Since):N0}";
+                var sub = L.F("за сутки {0:N0}", ledger.RequestsSince(now.AddHours(-24)));
+                if (ServerUp && srv.Since != default) sub += L.F(" · сессия {0:N0}", ledger.RequestsSince(srv.Since));
                 ReqSub.Text = sub;
                 int m = ledger.CleanMinutes;
-                CleanText.Text = m >= 60 ? $"{m / 60.0:0.#} ч" : $"{m} мин";
-                CleanSub.Text = $"{ledger.CleanRequests:N0} запросов" + (srv.Build != null ? " · " + srv.Build : "");
+                CleanText.Text = m >= 60 ? L.F("{0:0.#} ч", m / 60.0) : L.F("{0} мин", m);
+                CleanSub.Text = L.F("{0:N0} запросов", ledger.CleanRequests) + (srv.Build != null ? " · " + srv.Build : "");
                 CleanTile.ToolTip = ledger.CleanSince is DateTime cs
-                    ? (ledger.HasFailures ? $"Часы работы и запросы с последнего сбоя ({cs:dd.MM HH:mm})" : $"Сбоев не было с начала учёта ({cs:dd.MM HH:mm})")
-                    : "Учёт только начался";
+                    ? (ledger.HasFailures ? L.F("Часы работы и запросы с последнего сбоя ({0:dd.MM HH:mm})", cs) : L.F("Сбоев не было с начала учёта ({0:dd.MM HH:mm})", cs))
+                    : L.T("Учёт только начался");
             }
 
             // actions: Primary starts or switches; restart and stop sit below it
+            lastUiMs = clock.ElapsedMilliseconds;
+            var chosen = Chosen;
             bool same = SelectionRuns;
             bool showPrimary = !ServerUp || !same;
             BtnPrimary.Visibility = showPrimary && st != ServerState.Starting ? Visibility.Visible : Visibility.Collapsed;
             BtnPrimary.IsEnabled = !busy && selected != null;
-            if (busy) { BtnPrimaryIcon.Text = ""; BtnPrimaryText.Text = "Подождите…"; }
-            else if (!ServerUp) { BtnPrimaryIcon.Text = ""; BtnPrimaryText.Text = $"Запустить «{Chosen?.ShortTitle}»"; }
-            else if (running != null && Chosen != null && running.Id == Chosen.Id && running.Old == Chosen.Old && st != ServerState.External)
-            { BtnPrimaryIcon.Text = ""; BtnPrimaryText.Text = "Применить изменения"; }     // same mode, only the toggles differ
-            else { BtnPrimaryIcon.Text = ""; BtnPrimaryText.Text = running != null && Chosen != null && running.Id == Chosen.Id
-                ? (Chosen.Old ? "Переключить на запасную модель" : "Переключить на основную модель")   // same mode, the model switch moved
-                : $"Переключить на «{Chosen?.ShortTitle}»"; }
-            BtnPrimary.ToolTip = Chosen == null ? null : $"{Chosen.Title}\n{Chosen.Badge}";
+            if (busy) { BtnPrimaryIcon.Text = ""; BtnPrimaryText.Text = L.T("Подождите…"); }
+            else if (!ServerUp) { BtnPrimaryIcon.Text = ""; BtnPrimaryText.Text = L.F("Запустить «{0}»", chosen?.ShortTitle); }
+            else if (running != null && chosen != null && running.Id == chosen.Id && running.Slot == chosen.Slot && st != ServerState.External)
+            { BtnPrimaryIcon.Text = ""; BtnPrimaryText.Text = L.T("Применить изменения"); }     // same mode, only the toggles differ
+            else { BtnPrimaryIcon.Text = ""; BtnPrimaryText.Text = running != null && chosen != null && running.Id == chosen.Id
+                ? chosen.Slot switch { Profile.OldSlot => L.T("Переключить на запасную модель"), Profile.UncensoredSlot => L.T("Переключить на модель без цензуры"), _ => L.T("Переключить на основную модель") }   // same mode, the model switch moved
+                : L.F("Переключить на «{0}»", chosen?.ShortTitle); }
+            BtnPrimary.ToolTip = chosen == null ? null : $"{chosen.Title}\n{chosen.Badge}";
             SecondaryActions.Visibility = ServerUp ? Visibility.Visible : Visibility.Collapsed;
             bool showRestart = ServerUp && same && st != ServerState.Starting;
             BtnRestart.Visibility = showRestart ? Visibility.Visible : Visibility.Collapsed;
@@ -705,43 +774,43 @@ namespace QwenStudio
             BtnRestart.IsEnabled = BtnStop.IsEnabled = !busy;
             string hint = st switch
             {
-                ServerState.External => "Этот llama-server запущен не из Qwen Studio: остановить его можно, перезапустить — нет.",
-                ServerState.Crashed => "Сервер упал. Что случилось — во вкладке «Журнал»; запустить заново можно кнопкой выше.",
+                ServerState.External => L.T("Этот llama-server запущен не из Qwen Studio: остановить его можно, перезапустить — нет."),
+                ServerState.Crashed => L.T("Сервер упал. Что случилось — во вкладке «Журнал»; запустить заново можно кнопкой выше."),
                 _ => null,
             };
             ActionHint.Text = hint ?? "";
             ActionHint.Visibility = hint != null ? Visibility.Visible : Visibility.Collapsed;
             foreach (var kv in profileDots)
-                kv.Value.Visibility = running != null && kv.Key.Id == running.Id && running.Old == oldModel && st != ServerState.Crashed ? Visibility.Visible : Visibility.Collapsed;
+                kv.Value.Visibility = running != null && kv.Key.Id == running.Id && running.Slot == model && st != ServerState.Crashed ? Visibility.Visible : Visibility.Collapsed;
 
             // gpu
             var gs = lastGpu;
             if (gs.Ok)
             {
                 GpuName.Text = gs.Name;
-                VramText.Text = $"{gs.UsedMiB / 1024:0.0} / {gs.TotalMiB / 1024:0} ГБ";
+                VramText.Text = L.F("{0:0.0} / {1:0} ГБ", gs.UsedMiB / 1024, gs.TotalMiB / 1024);
                 double pct = gs.UsedMiB * 100 / gs.TotalMiB;
                 VramBar.Value = pct;
                 Paint(VramBar, Control.ForegroundProperty, pct > 97 ? "Bad" : pct > 90 ? "Warn" : "Accent");
                 VramPct.Text = $"{pct:0}%";
                 GpuUtil.Text = $"{gs.Util}%";
                 GpuPower.Text = $"{gs.PowerW:0} W";
-                GpuPower.ToolTip = gs.LimitW > 0 ? $"лимит {gs.LimitW:0} W" : null;
+                GpuPower.ToolTip = gs.LimitW > 0 ? L.F("лимит {0:0} W", gs.LimitW) : null;
                 GpuTemp.Text = $"{gs.TempC}°";
                 Paint(GpuTemp, TextBlock.ForegroundProperty, gs.TempC >= 83 ? "Bad" : gs.TempC >= 75 ? "Warn" : "Text");
-                PowerText.Text = gs.LimitW > 0 ? $"сейчас {gs.LimitW:0} W" : "—";
-                GpuName.ToolTip = gpu.Driver != null ? "драйвер " + gpu.Driver : null;
+                PowerText.Text = gs.LimitW > 0 ? L.F("сейчас {0:0} W", gs.LimitW) : "—";
+                GpuName.ToolTip = gpu.Driver != null ? L.T("драйвер ") + gpu.Driver : null;
             }
-            else VramText.Text = "нет данных NVML";
+            else VramText.Text = L.T("нет данных NVML");
 
             // connection
             int port = srv.Port > 0 && ServerUp ? srv.Port : cfg.Port;
-            bool lan = cfg.Host != "127.0.0.1" && cfg.Host != "localhost";
+            bool lan = cfg.OnLan;
             UrlLocal.Text = $"http://127.0.0.1:{port}/v1";
-            UrlLan.Text = lan ? $"http://{cfg.LanIp}:{port}/v1" : "выключено";
+            UrlLan.Text = lan ? $"http://{cfg.LanIp}:{port}/v1" : L.T("выключено");
             Paint(UrlLan, TextBlock.ForegroundProperty, lan ? "Text" : "Faint");
             BtnCopyLan.IsEnabled = lan;
-            var key = keyShown ? (string.IsNullOrEmpty(cfg.ApiKey) ? "— не задан —" : cfg.ApiKey) : Keys.Mask(cfg.ApiKey);
+            var key = keyShown ? (string.IsNullOrEmpty(cfg.ApiKey) ? L.T("— не задан —") : cfg.ApiKey) : Keys.Mask(cfg.ApiKey);
             KeyText.Text = key;
             KeyText2.Text = key;
             UpdateClients();
@@ -751,17 +820,17 @@ namespace QwenStudio
             ModelAlias.Text = aliasOf == null ? "—" : aliasOf.Alias ?? IOPath.GetFileNameWithoutExtension(cfg.ModelFile(aliasOf));
             if (!images.Installed)
             {
-                ImgState.Text = "ComfyUI не указан"; Paint(ImgDot, Shape.FillProperty, "Faint");
+                ImgState.Text = L.T("ComfyUI не указан"); Paint(ImgDot, Shape.FillProperty, "Faint");
                 BtnImg.IsEnabled = false; BtnImgStop.Visibility = Visibility.Collapsed;
             }
             else
             {
                 (string text, string dot, string btn) im =
-                    imagesBusy ? ("подождите…", "Warn", "Открыть")
-                    : images.ComfyUp && images.Generating ? ("рисует картинку", "Good", "Открыть")
+                    imagesBusy ? (L.T("подождите…"), "Warn", L.T("Открыть"))
+                    : images.ComfyUp && images.Generating ? (L.T("рисует картинку"), "Good", L.T("Открыть"))
                     // the row is narrow next to the stop button: memory replaces the port when models are loaded
-                    : images.ComfyUp ? (!ServerUp && images.HeldMiB >= Images.HeldThresholdMiB ? $"работает · {images.HeldMiB / 1024.0:0.0} ГБ" : $"работает · :{Images.ComfyPort}", "Good", "Открыть")
-                    : ("выключен", "Faint", "Запустить");
+                    : images.ComfyUp ? (!ServerUp && images.HeldMiB >= Images.HeldThresholdMiB ? L.F("работает · {0:0.0} ГБ", images.HeldMiB / 1024.0) : L.F("работает · :{0}", Images.ComfyPort), "Good", L.T("Открыть"))
+                    : (L.T("выключен"), "Faint", L.T("Запустить"));
                 ImgState.Text = im.text;
                 BtnImg.Content = im.btn;
                 BtnImg.IsEnabled = !imagesBusy;
@@ -772,7 +841,7 @@ namespace QwenStudio
             // web ui
             if (!webui.Installed)
             {
-                WebState.Text = "не установлен"; Paint(WebDot, Shape.FillProperty, "Faint");
+                WebState.Text = L.T("не установлен"); Paint(WebDot, Shape.FillProperty, "Faint");
                 BtnWeb.IsEnabled = false; BtnWebStop.Visibility = Visibility.Collapsed;
             }
             else
@@ -780,9 +849,9 @@ namespace QwenStudio
                 BtnWeb.IsEnabled = true;
                 (string text, string dot, string btn) w = webStatus switch
                 {
-                    2 => ($"работает · :{cfg.WebUiPort}", "Good", "Открыть"),
-                    1 => ("запускается…", "Warn", "Открыть"),
-                    _ => ("выключен", "Faint", "Запустить"),
+                    2 => (L.F("работает · :{0}", cfg.WebUiPort), "Good", L.T("Открыть")),
+                    1 => (L.T("запускается…"), "Warn", L.T("Открыть")),
+                    _ => (L.T("выключен"), "Faint", L.T("Запустить")),
                 };
                 WebState.Text = w.text;
                 BtnWeb.Content = w.btn;
@@ -823,11 +892,11 @@ namespace QwenStudio
                     cell.Children.Add(tickMark);
                 }
                 var tip = new StringBuilder($"{b.Start:HH:mm}–{b.Start.AddMinutes(15):HH:mm}");
-                if (b.Req > 0) tip.Append($"\n{b.Req} запрос(ов) · {Tokens(b.Gen)} токенов");
-                else tip.Append(b.UpMinutes > 0 ? "\nсервер работал, запросов не было" : "\nсервер не работал");
-                if (b.Slots > 0 && b.BusyMax > 0) tip.Append($"\nзанято до {b.BusyMax} из {b.Slots} слотов");
-                if (b.Rej > 0) tip.Append($"\nотклонено с неверным ключом: {b.Rej}");
-                foreach (var f in b.Failures) tip.Append($"\nсбой {f.At:HH:mm}: {f.Event} {f.Reason}".TrimEnd());
+                if (b.Req > 0) tip.Append(L.F("\n{0} запрос(ов) · {1} токенов", b.Req, Tokens(b.Gen)));
+                else tip.Append(b.UpMinutes > 0 ? L.T("\nсервер работал, запросов не было") : L.T("\nсервер не работал"));
+                if (b.Slots > 0 && b.BusyMax > 0) tip.Append(L.F("\nзанято до {0} из {1} слотов", b.BusyMax, b.Slots));
+                if (b.Rej > 0) tip.Append(L.F("\nотклонено с неверным ключом: {0}", b.Rej));
+                foreach (var f in b.Failures) tip.Append(L.F("\nсбой {0:HH:mm}: {1} {2}", f.At, f.Event, f.Reason).TrimEnd());
                 cell.ToolTip = tip.ToString();
                 ToolTipService.SetInitialShowDelay(cell, 0);
                 ChartBars.Children.Add(cell);
@@ -842,13 +911,13 @@ namespace QwenStudio
                 Grid.SetColumn(t, i);
                 ChartAxis.Children.Add(t);
             }
-            var nowLabel = new TextBlock { Text = "сейчас", Style = R<Style>("Label"), HorizontalAlignment = HorizontalAlignment.Right };
+            var nowLabel = new TextBlock { Text = L.T("сейчас"), Style = R<Style>("Label"), HorizontalAlignment = HorizontalAlignment.Right };
             Grid.SetColumn(nowLabel, 3);
             ChartAxis.Children.Add(nowLabel);
 
             int req = buckets.Sum(b => b.Req);
             double upH = buckets.Sum(b => b.UpMinutes) / 60.0;
-            ChartSummary.Text = $"{req:N0} запросов · {Tokens(buckets.Sum(b => b.Gen))} токенов · работал {upH:0.#} ч";
+            ChartSummary.Text = L.F("{0:N0} запросов · {1} токенов · работал {2:0.#} ч", req, Tokens(buckets.Sum(b => b.Gen)), upH);
         }
 
         // ───────────────────────── live chart ─────────────────────────
@@ -858,7 +927,7 @@ namespace QwenStudio
             liveMode = ChartLive.IsChecked == true;
             ChartBars.Visibility = liveMode ? Visibility.Collapsed : Visibility.Visible;
             LiveChart.Visibility = liveMode ? Visibility.Visible : Visibility.Collapsed;
-            ChartTitle.Text = liveMode ? "НАГРУЗКА ЗА 5 МИНУТ" : "НАГРУЗКА ЗА 24 ЧАСА";
+            ChartTitle.Text = liveMode ? L.T("НАГРУЗКА ЗА 5 МИНУТ") : L.T("НАГРУЗКА ЗА 24 ЧАСА");
             ChartAxis.Tag = null;
             if (liveMode) RenderLive(); else RenderChart();
             if (IsLoaded) try { ui.Set("CHART", liveMode ? "live" : "day"); } catch { }
@@ -905,14 +974,14 @@ namespace QwenStudio
                 if (!groups.TryGetValue(step, out var xs))
                 {
                     liveUtil[i] = null;
-                    cell.ToolTip = $"{start:HH:mm:ss}\nнет данных";
+                    cell.ToolTip = L.F("{0:HH:mm:ss}\nнет данных", start);
                     continue;
                 }
                 double util = xs.Average(x => x.g.Util);
                 liveUtil[i] = util;
-                var tip = new StringBuilder($"{start:HH:mm:ss}\nзагрузка {util:0}% · {xs.Max(x => x.g.UsedMiB) / 1024:0.0} ГБ · {xs.Average(x => x.g.PowerW):0} W");
+                var tip = new StringBuilder(L.F("{0:HH:mm:ss}\nзагрузка {1:0}% · {2:0.0} ГБ · {3:0} W", start, util, xs.Max(x => x.g.UsedMiB) / 1024, xs.Average(x => x.g.PowerW)));
                 var tps = xs.Where(x => x.tps != null).Select(x => x.tps.Value).DefaultIfEmpty().Max();
-                if (tps > 0) tip.Append($"\nсервер генерирует {tps:0} т/с");
+                if (tps > 0) tip.Append(L.F("\nсервер генерирует {0:0} т/с", tps));
                 cell.ToolTip = tip.ToString();
             }
             DrawLive();
@@ -929,17 +998,17 @@ namespace QwenStudio
                     Grid.SetColumn(t, i);
                     ChartAxis.Children.Add(t);
                 }
-                var nowLabel = new TextBlock { Text = "сейчас", Style = R<Style>("Label"), HorizontalAlignment = HorizontalAlignment.Right };
+                var nowLabel = new TextBlock { Text = L.T("сейчас"), Style = R<Style>("Label"), HorizontalAlignment = HorizontalAlignment.Right };
                 Grid.SetColumn(nowLabel, 3);
                 ChartAxis.Children.Add(nowLabel);
             }
 
             var g = lastGpu;
-            if (!g.Ok) { ChartSummary.Text = "нет данных NVML"; return; }
-            var sum = new StringBuilder($"сейчас {g.Util}% · {g.UsedMiB / 1024:0.0} ГБ · {g.PowerW:0} W");
-            if (activity.Ok && activity.AggTps is double now && now > 0) sum.Append($" · {now:0} т/с");
+            if (!g.Ok) { ChartSummary.Text = L.T("нет данных NVML"); return; }
+            var sum = new StringBuilder(L.F("сейчас {0}% · {1:0.0} ГБ · {2:0} W", g.Util, g.UsedMiB / 1024, g.PowerW));
+            if (activity.Ok && activity.AggTps is double now && now > 0) sum.Append(L.F(" · {0:0} т/с", now));
             var ok = liveSamples.Where(x => x.g.Ok).ToList();
-            if (ok.Count > 0) sum.Append($" · пик за 5 мин {ok.Max(x => x.g.Util)}%");
+            if (ok.Count > 0) sum.Append(L.F(" · пик за 5 мин {0}%", ok.Max(x => x.g.Util)));
             ChartSummary.Text = sum.ToString();
         }
 
@@ -997,16 +1066,16 @@ namespace QwenStudio
 
         // ───────────────────────── statistics tab ─────────────────────────
 
-        /// <summary>"agent|old" → "Агент · запасная модель"; minutes of a server started elsewhere have no mode.</summary>
+        /// <summary>"agent|old" → "Агент · запасная модель", "chat|uncensored" → "Чат · без цензуры"; minutes of a server started elsewhere have no mode.</summary>
         string ModeTitle(string mode)
         {
             var parts = mode.Split('|');
-            if (parts[0] == "?") return "другой сервер";
-            var name = profiles.FirstOrDefault(p => p.Id == parts[0])?.Name ?? parts[0];
-            return parts.Length > 1 ? name + " · запасная модель" : name;
+            if (parts[0] == "?") return L.T("другой сервер");
+            var name = L.T(profiles.FirstOrDefault(p => p.Id == parts[0])?.Name ?? parts[0]);
+            return name + Profile.SlotSuffix(parts.Length > 1 ? parts[1] : null);
         }
 
-        /// <summary>One series colour per profile (Series1–4, unknown → Series5); the old model keeps the hue at SeriesAltOpacity.</summary>
+        /// <summary>One series colour per profile (Series1–4, unknown → Series5); the fallback and uncensored models keep the hue at SeriesAltOpacity.</summary>
         void PaintMode(FrameworkElement el, DependencyProperty prop, string mode)
         {
             var parts = mode.Split('|');
@@ -1015,12 +1084,12 @@ namespace QwenStudio
             if (parts.Length > 1) el.Opacity = R<double>("SeriesAltOpacity");
         }
 
-        /// <summary>Main model's modes in profile order, then the old model's, then unknown.</summary>
+        /// <summary>Main model's modes in profile order, then the uncensored model's, the fallback model's, then unknown.</summary>
         List<string> OrderedModes() => ledger.Modes()
-            .OrderBy(m => m.Contains("|old") ? 1 : 0)
+            .OrderBy(m => m.Contains("|old") ? 2 : m.Contains("|uncensored") ? 1 : 0)
             .ThenBy(m => { int i = profiles.FindIndex(p => p.Id == m.Split('|')[0]); return i < 0 ? 99 : i; }).ToList();
 
-        static string Hours(int minutes) => minutes >= 60 ? $"{minutes / 60.0:0.#} ч" : $"{minutes} мин";
+        static string Hours(int minutes) => minutes >= 60 ? L.F("{0:0.#} ч", minutes / 60.0) : L.F("{0} мин", minutes);
 
         TextBlock Cell(string text, string style, int row, int col)
         {
@@ -1054,18 +1123,18 @@ namespace QwenStudio
         {
             if (!ledgerReady) return;
             var today = DateTime.Today;
-            StatsSince.Text = ledger.FirstDay is DateTime first ? $"учёт с {first:dd.MM.yyyy}" : "учёт только начался";
+            StatsSince.Text = ledger.FirstDay is DateTime first ? L.F("учёт с {0:dd.MM.yyyy}", first) : L.T("учёт только начался");
 
             // ── totals by period ──
             var rows = new (string name, Totals t)[]
             {
-                ("Сегодня", ledger.Period(today)),
-                ("Вчера", ledger.Period(today.AddDays(-1), today)),
-                ("7 дней", ledger.Period(today.AddDays(-6))),
-                ("30 дней", ledger.Period(today.AddDays(-29))),
-                ("Всё время", ledger.Period(null)),
+                (L.T("Сегодня"), ledger.Period(today)),
+                (L.T("Вчера"), ledger.Period(today.AddDays(-1), today)),
+                (L.T("7 дней"), ledger.Period(today.AddDays(-6))),
+                (L.T("30 дней"), ledger.Period(today.AddDays(-29))),
+                (L.T("Всё время"), ledger.Period(null)),
             };
-            Table(StatsTable, new[] { "ЗАПРОСОВ", "ТОКЕНОВ", "РАБОТАЛ", "СБОЕВ", "ОТКЛОНЕНО" });
+            Table(StatsTable, new[] { L.T("ЗАПРОСОВ"), L.T("ТОКЕНОВ"), L.T("РАБОТАЛ"), L.T("СБОЕВ"), L.T("ОТКЛОНЕНО") });
             for (int r = 0; r < rows.Length; r++)
             {
                 var (name, t) = rows[r];
@@ -1090,7 +1159,7 @@ namespace QwenStudio
             var dayTotals = days.Select(d => ledger.Period(d, d.AddDays(1))).ToList();
             bool gen = DaysGen.IsChecked == true, up = DaysUp.IsChecked == true;
             Func<Totals, double> metric = gen ? t => t.Gen : up ? t => t.UpMinutes : t => t.Req;
-            string Fmt(double v) => gen ? Tokens((long)v) + " токенов" : up ? Hours((int)v) : $"{v:N0} запросов";
+            string Fmt(double v) => gen ? Tokens((long)v) + L.T(" токенов") : up ? Hours((int)v) : L.F("{0:N0} запросов", v);
             double max = Math.Max(1, cube.Max(ms => ms.Sum(metric)));
             double h = R<double>("ChartHeight"), minBar = R<double>("ChartMinBar");
             DayBars.Children.Clear();
@@ -1128,10 +1197,10 @@ namespace QwenStudio
                 var tip = new StringBuilder($"{days[i]:ddd dd.MM}: {Fmt(total)}");
                 for (int k = 0; k < modes.Count; k++)
                     if (metric(cube[i][k]) > 0) tip.Append($"\n   {ModeTitle(modes[k])}: {Fmt(metric(cube[i][k]))}");
-                if (dt.UpMinutes > 0) tip.Append($"\nработал {Hours(dt.UpMinutes)} · {dt.Req:N0} запросов · {Tokens(dt.Gen)} токенов");
-                else tip.Append("\nсервер не работал");
-                if (dt.Failures > 0) tip.Append($"\nсбоев: {dt.Failures}");
-                if (dt.Rej > 0) tip.Append($"\nотклонено с неверным ключом: {dt.Rej}");
+                if (dt.UpMinutes > 0) tip.Append(L.F("\nработал {0} · {1:N0} запросов · {2} токенов", Hours(dt.UpMinutes), dt.Req, Tokens(dt.Gen)));
+                else tip.Append(L.T("\nсервер не работал"));
+                if (dt.Failures > 0) tip.Append(L.F("\nсбоев: {0}", dt.Failures));
+                if (dt.Rej > 0) tip.Append(L.F("\nотклонено с неверным ключом: {0}", dt.Rej));
                 cell.ToolTip = tip.ToString();
                 ToolTipService.SetInitialShowDelay(cell, 0);
                 DayBars.Children.Add(cell);
@@ -1144,11 +1213,11 @@ namespace QwenStudio
                 Grid.SetColumn(t, i); Grid.SetColumnSpan(t, 7);
                 DayAxis.Children.Add(t);
             }
-            var todayLabel = new TextBlock { Text = "сегодня", Style = R<Style>("Label"), HorizontalAlignment = HorizontalAlignment.Right };
+            var todayLabel = new TextBlock { Text = L.T("сегодня"), Style = R<Style>("Label"), HorizontalAlignment = HorizontalAlignment.Right };
             Grid.SetColumn(todayLabel, 26); Grid.SetColumnSpan(todayLabel, 4);
             DayAxis.Children.Add(todayLabel);
             var month = ledger.Period(days[0]);
-            DaysSummary.Text = $"{month.Req:N0} запросов · {Tokens(month.Gen)} токенов · работал {Hours(month.UpMinutes)}";
+            DaysSummary.Text = L.F("{0:N0} запросов · {1} токенов · работал {2}", month.Req, Tokens(month.Gen), Hours(month.UpMinutes));
 
             DaysLegend.Children.Clear();
             foreach (var m in modes)
@@ -1159,7 +1228,7 @@ namespace QwenStudio
             }
 
             // ── all time by mode ──
-            Table(ModesTable, new[] { "ЗАПРОСОВ", "ТОКЕНОВ", "РАБОТАЛ", "ДОЛЯ ЗАПРОСОВ" });
+            Table(ModesTable, new[] { L.T("ЗАПРОСОВ"), L.T("ТОКЕНОВ"), L.T("РАБОТАЛ"), L.T("ДОЛЯ ЗАПРОСОВ") });
             long allReq = Math.Max(1, ledger.Period(null).Req);
             for (int r = 0; r < modes.Count; r++)
             {
@@ -1200,14 +1269,10 @@ namespace QwenStudio
                 n++;
             }
             if (own.Length > 0) { try { File.AppendAllText(IOPath.Combine(Paths.Logs, "studio.log"), own.ToString()); } catch { } }
-            if (log.Count > 6000)
-            {
-                var keep = log.Skip(log.Count - 5000).ToList();
-                log.Clear();
-                foreach (var l in keep) log.Add(l);
-            }
+            if (log.Count > 6000) log.RemoveFirst(log.Count - 5000);
             if (atEnd && LogList.Items.Count > 0) LogList.ScrollIntoView(LogList.Items[^1]);
-            if (n > 0) UpdateUi();
+            // P2: a busy log drains every 120 ms; the poll refreshes every second anyway
+            if (n > 0 && clock.ElapsedMilliseconds - lastUiMs >= 500) UpdateUi();
         }
 
         void Filter_Changed(object sender, RoutedEventArgs e)
@@ -1250,15 +1315,14 @@ namespace QwenStudio
             if (webStatus > 0) { Proc.Open(webui.Url); return; }
             try
             {
-                webui.Start();
+                await webui.Start();
                 webStatus = 1;
                 openWebWhenReady = true;
                 webStartAt = clock.Elapsed.TotalSeconds;
-                srv.Emit($"Запускаю Open WebUI на :{cfg.WebUiPort} — браузер откроется, когда он будет готов (обычно 20–60 с).");
-                if (!ServerUp) srv.Emit("Сервер модели не запущен — в Open WebUI не будет модели, пока вы его не запустите.", LogKind.Warn);
+                srv.Emit(L.F("Запускаю Open WebUI на :{0} — браузер откроется, когда он будет готов (обычно 20–60 с).", cfg.WebUiPort));
+                if (!ServerUp) srv.Emit(L.T("Сервер модели не запущен — в Open WebUI не будет модели, пока вы его не запустите."), LogKind.Warn);
             }
-            catch (Exception ex) { Error("Open WebUI не запустился: " + ex.Message); }
-            await Task.CompletedTask;
+            catch (Exception ex) { Error(L.T("Open WebUI не запустился: ") + ex.Message); }
             UpdateUi();
         }
 
@@ -1267,7 +1331,7 @@ namespace QwenStudio
             openWebWhenReady = false;
             await webui.Stop();
             webStatus = 0;
-            srv.Emit("Open WebUI остановлен.");
+            srv.Emit(L.T("Open WebUI остановлен."));
             UpdateUi();
         }
 
@@ -1278,24 +1342,30 @@ namespace QwenStudio
             if (images.ComfyUp) { Proc.Open(images.Url); return; }
             if (ServerUp)
             {
-                var used = lastGpu.Ok ? $"{lastGpu.UsedMiB / 1024:0.0} ГБ" : "почти всю память";
+                var used = lastGpu.Ok ? L.F("{0:0.0} ГБ", lastGpu.UsedMiB / 1024) : L.T("почти всю память");
                 var r = MessageBox.Show(this,
-                    $"Моделям картинок во время генерации нужна большая часть видеопамяти, а языковая модель сейчас занимает {used}. Вместе они могут не поместиться.\n\n" +
-                    "Да — остановить сервер и запустить ComfyUI.\nНет — запустить ComfyUI, сервер оставить.",
+                    L.F("Моделям картинок во время генерации нужна большая часть видеопамяти, а языковая модель сейчас занимает {0}. Вместе они могут не поместиться.\n\n", used) +
+                    L.T("Да — остановить сервер и запустить ComfyUI.\nНет — запустить ComfyUI, сервер оставить."),
                     "Qwen Studio", MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
                 if (r == MessageBoxResult.Cancel) return;
                 if (r == MessageBoxResult.Yes)
                 {
-                    if (busy || !await ConfirmInterrupt("Остановить сервер")) return;
-                    await Stop("images");
+                    if (busy) return;
+                    busyN++;
+                    try
+                    {
+                        if (!await ConfirmInterrupt(L.T("Остановить сервер"))) return;
+                        await Stop("images");
+                    }
+                    finally { busyN--; UpdateUi(); }
                 }
             }
             imagesBusy = true; UpdateUi();
             try
             {
-                srv.Emit($"Запускаю ComfyUI (:{Images.ComfyPort}) — обычно до минуты…");
+                srv.Emit(L.F("Запускаю ComfyUI (:{0}) — обычно до минуты…", Images.ComfyPort));
                 var (ok, message) = await images.Start();
-                if (ok) { srv.Emit($"ComfyUI готов: {images.Url}", LogKind.Good); Proc.Open(images.Url); }
+                if (ok) { srv.Emit(L.F("ComfyUI готов: {0}", images.Url), LogKind.Good); Proc.Open(images.Url); }
                 else srv.Emit(message, LogKind.Error);
             }
             finally { imagesBusy = false; UpdateUi(); }
@@ -1305,12 +1375,12 @@ namespace QwenStudio
         {
             if (imagesBusy) return;
             await images.Probe();
-            if (images.Generating && !Ask("ComfyUI сейчас рисует картинку — генерация оборвётся.\n\nОстановить ComfyUI?")) return;
+            if (images.Generating && !Ask(L.T("ComfyUI сейчас рисует картинку — генерация оборвётся.\n\nОстановить ComfyUI?"))) return;
             imagesBusy = true; UpdateUi();
             try
             {
                 await images.Stop();
-                srv.Emit(images.ComfyUp ? "ComfyUI не остановился: порт занят не им?" : "ComfyUI остановлен.", images.ComfyUp ? LogKind.Warn : LogKind.Info);
+                srv.Emit(images.ComfyUp ? L.T("ComfyUI не остановился: порт занят не им?") : L.T("ComfyUI остановлен."), images.ComfyUp ? LogKind.Warn : LogKind.Info);
             }
             finally { imagesBusy = false; UpdateUi(); }
         }
@@ -1324,7 +1394,7 @@ namespace QwenStudio
                     ? new ProcessStartInfo(Paths.OpencodeDesktop) { UseShellExecute = true, WorkingDirectory = Paths.Base }
                     : new ProcessStartInfo("cmd.exe", "/k opencode") { UseShellExecute = true, WorkingDirectory = Paths.Base };
                 Process.Start(psi);
-                if (!ServerUp) srv.Emit("OpenCode открыт, но сервер модели не запущен.", LogKind.Warn);
+                if (!ServerUp) srv.Emit(L.T("OpenCode открыт, но сервер модели не запущен."), LogKind.Warn);
             }
             catch (Exception ex) { Error(ex.Message); }
         }
@@ -1341,27 +1411,35 @@ namespace QwenStudio
         }
 
         /// <summary>Win32 copy, not WPF Clipboard: WPF's flush step froze the window for seconds under Parsec (see ClipboardText).</summary>
-        void Copy(string text)
+        void Copy(string text, bool secret = false)
         {
-            if (!ClipboardText.Set(text)) srv.Emit("Буфер обмена занят другой программой — не скопировано, попробуйте ещё раз.", LogKind.Warn);
+            if (!ClipboardText.Set(text, secret)) srv.Emit(L.T("Буфер обмена занят другой программой — не скопировано, попробуйте ещё раз."), LogKind.Warn);
         }
 
         void KeyEye_Click(object sender, RoutedEventArgs e) { keyShown = !keyShown; UpdateUi(); }
 
         void KeyCopy_Click(object sender, RoutedEventArgs e)
         {
-            if (!string.IsNullOrEmpty(cfg.ApiKey)) Copy(cfg.ApiKey);
+            if (!string.IsNullOrEmpty(cfg.ApiKey)) Copy(cfg.ApiKey, secret: true);
         }
 
         async void KeyNew_Click(object sender, RoutedEventArgs e)
         {
-            if (!Ask("Создать новый API-ключ?\n\nСтарый ключ перестанет работать: другим клиентам нужно будет выдать новый. " +
-                     "opencode обновится автоматически, если ключ прописан в его конфиге. Сервер будет перезапущен.")) return;
-            if (ServerUp && !await ConfirmInterrupt("Сменить ключ и перезапустить сервер")) return;
+            if (!Ask(L.T("Создать новый API-ключ?\n\nСтарый ключ перестанет работать: другим клиентам нужно будет выдать новый. ") +
+                     L.T("opencode обновится автоматически, если ключ прописан в его конфиге. Сервер будет перезапущен."))) return;
+            if (busy) return;
+            busyN++; UpdateUi();
+            try { await RotateKey(); }
+            finally { busyN--; UpdateUi(); }
+        }
+
+        async Task RotateKey()
+        {
+            if (ServerUp && !await ConfirmInterrupt(L.T("Сменить ключ и перезапустить сервер"))) return;
             var (newKey, oc) = Keys.Rotate(cfg);
             keyShown = false;
-            Copy(newKey);
-            srv.Emit("Новый API-ключ сохранён в server_config.env" + (oc ? " и в конфиг opencode" : "") + " и скопирован в буфер обмена.", LogKind.Good);
+            Copy(newKey, secret: true);
+            srv.Emit(L.T("Новый API-ключ сохранён в server_config.env") + (oc ? L.T(" и в конфиг opencode") : "") + L.T(" и скопирован в буфер обмена."), LogKind.Good);
             if (ServerUp && srv.Profile != null)
             {
                 var p = srv.Profile;
@@ -1372,9 +1450,9 @@ namespace QwenStudio
             {
                 // Open WebUI reads the key from its own database: write it there and restart it
                 await webui.Stop();
-                webui.Start();
+                await webui.Start();
                 webStatus = 1;
-                srv.Emit("Open WebUI перезапущен с новым ключом.", LogKind.Good);
+                srv.Emit(L.T("Open WebUI перезапущен с новым ключом."), LogKind.Good);
             }
             UpdateUi();
         }
@@ -1387,6 +1465,7 @@ namespace QwenStudio
             ("MODEL_PATH", "Модель", "GGUF|*.gguf"),
             ("FALLBACK_SERVER_EXE", "Запасной сервер", "llama-server.exe|llama-server.exe"),
             ("FALLBACK_MODEL_PATH", "Запасная модель", "GGUF|*.gguf"),
+            ("UNCENSORED_MODEL_PATH", "Модель без цензуры", "GGUF|*.gguf"),
             ("MMPROJ_PATH", "Модуль зрения (mmproj)", "GGUF|*.gguf"),
             ("COMFYUI_DIR", "ComfyUI (картинки)", "ComfyUI main.py или run_nvidia_gpu.bat|main.py;run_nvidia_gpu.bat"),
         };
@@ -1401,21 +1480,21 @@ namespace QwenStudio
                 row.ColumnDefinitions.Add(new ColumnDefinition());
                 row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
                 row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-                var label = new TextBlock { Text = title, Style = R<Style>("Label"), VerticalAlignment = VerticalAlignment.Center };
+                var label = new TextBlock { Text = L.T(title), Style = R<Style>("Label"), VerticalAlignment = VerticalAlignment.Center };
                 var box = new TextBox { Text = cfg.Env.Get(key), Height = R<double>("HControl"), FontFamily = R<FontFamily>("Mono"), FontSize = 12 };
                 var ok = new TextBlock { Style = R<Style>("Icon"), Margin = R<Thickness>("GapLeftS") };
-                var browse = new Button { Content = "Обзор…", Margin = R<Thickness>("GapLeftS") };
+                var browse = new Button { Content = L.T("Обзор…"), Margin = R<Thickness>("GapLeftS") };
                 void Mark()
                 {
                     bool exists = File.Exists(Paths.Resolve(box.Text)) || key == "COMFYUI_DIR" && images.Installed;
                     ok.Text = exists ? "" : "";
                     Paint(ok, TextBlock.ForegroundProperty, exists ? "Good" : "Bad");
-                    ok.ToolTip = exists ? Paths.Resolve(box.Text) : "файл не найден";
+                    ok.ToolTip = exists ? Paths.Resolve(box.Text) : L.T("файл не найден");
                 }
                 void Commit()
                 {
                     var v = box.Text.Trim();
-                    if (v != cfg.Env.Get(key)) { cfg.Env.Set(key, v); srv.Emit($"{key} = {v}"); }
+                    if (v != cfg.Env.Get(key)) { cfg.Env.Set(key, v); srv.Emit($"{key} = {v}"); if (key.EndsWith("MODEL_PATH")) { ShowModels(); ShowOptions(); UpdateUi(); } }
                     Mark();
                 }
                 box.LostFocus += (_, _) => Commit();
@@ -1423,7 +1502,7 @@ namespace QwenStudio
                 browse.Click += (_, _) =>
                 {
                     var cur = Paths.Resolve(box.Text);
-                    var dlg = new OpenFileDialog { Filter = filter + "|Все файлы|*.*", InitialDirectory = Directory.Exists(IOPath.GetDirectoryName(cur)) ? IOPath.GetDirectoryName(cur) : Paths.Base };
+                    var dlg = new OpenFileDialog { Filter = filter + L.T("|Все файлы|*.*"), InitialDirectory = Directory.Exists(IOPath.GetDirectoryName(cur)) ? IOPath.GetDirectoryName(cur) : Paths.Base };
                     if (dlg.ShowDialog(this) != true) return;
                     var rel = IOPath.GetRelativePath(Paths.Base, dlg.FileName);
                     box.Text = rel.StartsWith("..") ? dlg.FileName : rel;
@@ -1436,18 +1515,18 @@ namespace QwenStudio
             }
 
             LanToggle.Checked -= Lan_Changed; LanToggle.Unchecked -= Lan_Changed;
-            LanToggle.IsChecked = cfg.Host != "127.0.0.1" && cfg.Host != "localhost";
+            LanToggle.IsChecked = cfg.OnLan;
             LanToggle.Checked += Lan_Changed; LanToggle.Unchecked += Lan_Changed;
             PortBox.Text = cfg.Port.ToString();
             var ips = Net.LanIps();
-            LanIpText.Text = ips.Count == 0 ? "сеть не найдена" : string.Join("   ", ips);
+            LanIpText.Text = ips.Count == 0 ? L.T("сеть не найдена") : string.Join("   ", ips);
 
             FillAutostart();
             FillArchive();
             int watts = cfg.Env.GetInt("POWER_LIMIT_W", 0);
             BtnPower.Visibility = watts > 0 ? Visibility.Visible : Visibility.Collapsed;
-            BtnPower.Content = $"Установить {watts} W";
-            AboutText.Text = $"Qwen Studio {typeof(App).Assembly.GetName().Version?.ToString(3)} · папка проекта: {Paths.Base}";
+            BtnPower.Content = L.F("Установить {0} W", watts);
+            AboutText.Text = L.F("Qwen Studio {0} · папка проекта: {1}", typeof(App).Assembly.GetName().Version?.ToString(3), Paths.Base);
         }
 
         void FillAutostart()
@@ -1463,10 +1542,10 @@ namespace QwenStudio
             AutoServerToggle.Checked += AutoServer_Changed; AutoServerToggle.Unchecked += AutoServer_Changed;
 
             var last = Profile.FromKey(profiles, ui.Get("LAST_START"));
-            var info = last != null ? $"Последний запущенный режим: {last.Title}." : "Сервер ещё не запускался из этой версии — режим для автозапуска появится после первого запуска.";
+            var info = last != null ? L.F("Последний запущенный режим: {0}.", last.Title) : L.T("Сервер ещё не запускался из этой версии — режим для автозапуска появится после первого запуска.");
             bool stale = false;
             try { stale = Autostart.Stale; } catch { }
-            if (stale) info += " Автозапуск записан для другой копии Qwen Studio — выключите и включите, чтобы открывалась эта.";
+            if (stale) info += L.T(" Автозапуск записан для другой копии Qwen Studio — выключите и включите, чтобы открывалась эта.");
             AutostartInfo.Text = info;
         }
 
@@ -1476,9 +1555,9 @@ namespace QwenStudio
             try
             {
                 Autostart.Set(on);
-                srv.Emit(on ? "Qwen Studio будет открываться при входе в Windows." : "Автозапуск Qwen Studio выключен.");
+                srv.Emit(on ? L.T("Qwen Studio будет открываться при входе в Windows.") : L.T("Автозапуск Qwen Studio выключен."));
             }
-            catch (Exception ex) { Error("Не удалось изменить автозапуск: " + ex.Message); }
+            catch (Exception ex) { Error(L.T("Не удалось изменить автозапуск: ") + ex.Message); }
             FillAutostart();
         }
 
@@ -1486,7 +1565,7 @@ namespace QwenStudio
         {
             bool on = AutoServerToggle.IsChecked == true;
             try { ui.Set("AUTOSTART_SERVER", on ? "1" : "0"); } catch { }
-            srv.Emit(on ? "При автозапуске сервер поднимется в последнем режиме (если видеокарта свободна)." : "При автозапуске сервер запускаться не будет.");
+            srv.Emit(on ? L.T("При автозапуске сервер поднимется в последнем режиме (если видеокарта свободна).") : L.T("При автозапуске сервер запускаться не будет."));
             FillAutostart();
         }
 
@@ -1494,8 +1573,8 @@ namespace QwenStudio
         {
             var (files, bytes) = LogArchive.Pending(srv.LogFile);
             ArchiveText.Text = files > 0
-                ? $"{files} журнал(ов) старше {LogArchive.KeepDays} дней · {bytes / 1048576.0:0.#} МБ"
-                : $"журналы старше {LogArchive.KeepDays} дней упаковываются в архив раз в сутки";
+                ? L.F("{0} журнал(ов) старше {1} дней · {2:0.#} МБ", files, LogArchive.KeepDays, bytes / 1048576.0)
+                : L.F("журналы старше {0} дней упаковываются в архив раз в сутки", LogArchive.KeepDays);
             BtnArchive.IsEnabled = files > 0;
         }
 
@@ -1507,10 +1586,10 @@ namespace QwenStudio
             var current = srv.LogFile;
             LogArchive.Result r;
             try { r = await Task.Run(() => LogArchive.Run(current)); }
-            catch (Exception ex) { srv.Emit("Архив журналов: " + ex.Message, LogKind.Warn); return; }
-            if (r.Files > 0) srv.Emit($"Старые журналы упакованы: {r.Files} шт., {r.Bytes / 1048576.0:0.#} МБ → logs\\studio\\archive, оригиналы в корзине.", LogKind.Good);
-            else if (manual && r.Errors.Count == 0) srv.Emit("Старых журналов нет.");
-            foreach (var err in r.Errors) srv.Emit("Архив журналов: " + err, LogKind.Warn);
+            catch (Exception ex) { srv.Emit(L.T("Архив журналов: ") + ex.Message, LogKind.Warn); return; }
+            if (r.Files > 0) srv.Emit(L.F("Старые журналы упакованы: {0} шт., {1:0.#} МБ → logs\\studio\\archive, оригиналы в корзине.", r.Files, r.Bytes / 1048576.0), LogKind.Good);
+            else if (manual && r.Errors.Count == 0) srv.Emit(L.T("Старых журналов нет."));
+            foreach (var err in r.Errors) srv.Emit(L.T("Архив журналов: ") + err, LogKind.Warn);
             FillArchive();
         }
 
@@ -1530,20 +1609,21 @@ namespace QwenStudio
                 FillAutostart();
                 FillArchive();
                 int rej = ledgerReady ? ledger.RejectedSince(DateTime.Now.AddHours(-24)) : 0;
-                RejectedInfo.Text = $"За сутки отклонено {rej} запрос(ов) с неверным ключом — у кого-то из клиентов старый ключ.";
+                RejectedInfo.Text = L.F("За сутки отклонено {0} запрос(ов) с неверным ключом — у кого-то из клиентов старый ключ.", rej);
                 RejectedInfo.Visibility = rej > 0 ? Visibility.Visible : Visibility.Collapsed;
-                FwText.Text = "проверяю…";
+                FwText.Text = L.T("проверяю…");
+                Paint(FwDot, Shape.FillProperty, "Faint");
                 bool ok = await Firewall.AllPresent(cfg);
-                FwText.Text = ok ? "порты открыты для локальной сети" : "правила не найдены";
-                Paint(FwText, TextBlock.ForegroundProperty, ok ? "Good" : "Warn");
-                BtnFw.Content = ok ? "Пересоздать правила" : "Открыть порты";
+                FwText.Text = ok ? L.T("порт сервера открыт для локальной сети") : L.T("правила не найдены");
+                Paint(FwDot, Shape.FillProperty, ok ? "Good" : "Warn");
+                BtnFw.Content = ok ? L.T("Пересоздать правила") : L.T("Открыть порты");
             }
         }
 
         void Lan_Changed(object sender, RoutedEventArgs e)
         {
             cfg.Env.Set("HOST", LanToggle.IsChecked == true ? "0.0.0.0" : "127.0.0.1");
-            srv.Emit(LanToggle.IsChecked == true ? "Доступ из сети включён — применится при следующем запуске сервера." : "Сервер будет доступен только с этого компьютера — после перезапуска.");
+            srv.Emit(LanToggle.IsChecked == true ? L.T("Доступ из сети включён — применится при следующем запуске сервера.") : L.T("Сервер будет доступен только с этого компьютера — после перезапуска."));
             UpdateUi();
         }
 
@@ -1551,7 +1631,7 @@ namespace QwenStudio
         {
             if (int.TryParse(PortBox.Text.Trim(), out var p) && p is > 0 and < 65536)
             {
-                if (p != cfg.Port) { cfg.Env.Set("PORT", p.ToString()); srv.Emit($"Порт сервера: {p} (при следующем запуске)"); }
+                if (p != cfg.Port) { cfg.Env.Set("PORT", p.ToString()); srv.Emit(L.F("Порт сервера: {0} (при следующем запуске)", p)); }
             }
             else PortBox.Text = cfg.Port.ToString();
             UpdateUi();
@@ -1559,9 +1639,9 @@ namespace QwenStudio
 
         async void Firewall_Click(object sender, RoutedEventArgs e)
         {
-            if (!Ask($"Разрешить входящие подключения на порты {cfg.Port} (сервер) и {cfg.WebUiPort} (Open WebUI) из локальной подсети?\n\nПонадобятся права администратора.")) return;
+            if (!Ask(L.F("Разрешить входящие подключения на порт сервера {0} из локальной подсети?\n\nOpen WebUI остаётся доступен только с этого компьютера. Понадобятся права администратора.", cfg.Port))) return;
             bool ok = await Firewall.Add(cfg);
-            srv.Emit(ok ? "Правила брандмауэра созданы." : "Правила брандмауэра не созданы (отказ или ошибка UAC).", ok ? LogKind.Good : LogKind.Warn);
+            srv.Emit(ok ? L.T("Правила брандмауэра созданы.") : L.T("Правила брандмауэра не созданы (отказ или ошибка UAC)."), ok ? LogKind.Good : LogKind.Warn);
             Tab_Checked(null, null);
         }
 
@@ -1569,9 +1649,9 @@ namespace QwenStudio
         {
             int watts = cfg.Env.GetInt("POWER_LIMIT_W", 0);
             if (watts <= 0) return;
-            if (!Ask($"Установить лимит мощности видеокарты {watts} W и задачу автозапуска NVIDIA-PowerLimit-{watts}W?\n\nПонадобятся права администратора.")) return;
+            if (!Ask(L.F("Установить лимит мощности видеокарты {0} W и задачу автозапуска NVIDIA-PowerLimit-{1}W?\n\nПонадобятся права администратора.", watts, watts))) return;
             bool ok = await Power.Apply(watts);
-            srv.Emit(ok ? $"Лимит мощности {watts} W установлен." : "Лимит мощности не установлен (отказ или ошибка UAC).", ok ? LogKind.Good : LogKind.Warn);
+            srv.Emit(ok ? L.F("Лимит мощности {0} W установлен.", watts) : L.T("Лимит мощности не установлен (отказ или ошибка UAC)."), ok ? LogKind.Good : LogKind.Warn);
         }
 
         Release latest;
@@ -1580,43 +1660,48 @@ namespace QwenStudio
         {
             if (latest != null) { await InstallLlama(latest); return; }
             BtnLlamaUpd.IsEnabled = false;
-            LlamaVer.Text = "проверяю…";
-            var localTask = Updates.LocalLlamaBuild(Paths.Resolve(cfg.Env.Get("SERVER_EXE", Paths.NewestLlama())));
-            var remote = await Updates.LatestLlama();
-            var local = await localTask;
-            BtnLlamaUpd.IsEnabled = true;
-            if (remote == null) { LlamaVer.Text = $"установлен b{local} · GitHub недоступен"; return; }
+            LlamaVer.Text = L.T("проверяю…");
+            int? local; Release remote;
+            try
+            {
+                var localTask = Updates.LocalLlamaBuild(Paths.Resolve(cfg.Env.Get("SERVER_EXE", Paths.NewestLlama())));
+                remote = await Updates.LatestLlama();
+                local = await localTask;
+            }
+            catch (Exception ex) { LlamaVer.Text = L.T("Не удалось проверить: ") + ex.Message; return; }
+            finally { BtnLlamaUpd.IsEnabled = true; }
+            if (remote == null) { LlamaVer.Text = L.F("установлен b{0} · GitHub недоступен", local); return; }
             if (local == null || remote.Build > local)
             {
                 latest = remote;
-                LlamaVer.Text = $"установлен {(local == null ? "?" : "b" + local)} · доступен b{remote.Build}";
-                BtnLlamaUpd.Content = $"Скачать b{remote.Build} ({remote.Size >> 20} МБ)";
+                LlamaVer.Text = L.F("установлен {0} · доступен b{1}", (local == null ? "?" : "b" + local), remote.Build);
+                BtnLlamaUpd.Content = L.F("Скачать b{0} ({1} МБ)", remote.Build, remote.Size >> 20);
             }
-            else LlamaVer.Text = $"b{local} — последняя версия";
+            else LlamaVer.Text = L.F("b{0} — последняя версия", local);
         }
 
         async Task InstallLlama(Release r)
         {
-            if (!Ask($"Скачать llama.cpp b{r.Build} (CUDA 12, {r.Size >> 20} МБ) с github.com/ggml-org/llama.cpp в папку llama-b{r.Build}?\n\nТекущая сборка останется на месте.")) return;
+            if (!Ask(L.F("Скачать llama.cpp b{0} (CUDA 12, {1} МБ) с github.com/ggml-org/llama.cpp в папку llama-b{2}?\n\nТекущая сборка останется на месте.", r.Build, r.Size >> 20, r.Build))) return;
             BtnLlamaUpd.IsEnabled = false;
             UpdProgress.Visibility = Visibility.Visible;
             try
             {
                 var exe = await Updates.InstallLlama(r, new Progress<string>(s => UpdProgress.Text = s));
-                if (exe == null) { Error("В архиве не нашёлся llama-server.exe."); return; }
-                UpdProgress.Text = $"Готово: {exe}";
-                srv.Emit($"llama.cpp b{r.Build} установлен в {exe}", LogKind.Good);
-                if (Ask($"Сделать b{r.Build} основным сервером?\n\nСейчас: {cfg.Env.Get("SERVER_EXE")}\nБудет: {exe}\n\nВернуть можно в «Сервер и модели». Применится при следующем запуске."))
+                if (exe == null) { Error(L.T("В архиве не нашёлся llama-server.exe.")); return; }
+                UpdProgress.Text = L.F("Готово: {0}", exe);
+                srv.Emit(L.F("llama.cpp b{0} установлен в {1}", r.Build, exe), LogKind.Good);
+                if (Ask(L.F("Сделать b{0} основным сервером?\n\nСейчас: {1}\nБудет: {2}\n\nВернуть можно в «Сервер и модели». Применится при следующем запуске.", r.Build, cfg.Env.Get("SERVER_EXE"), exe)))
                 {
                     srv.Emit($"SERVER_EXE: {cfg.Env.Get("SERVER_EXE")} → {exe}");
                     cfg.Env.Set("SERVER_EXE", exe);
                     FillSettings();
                 }
                 latest = null;
-                BtnLlamaUpd.Content = "Проверить";
-                LlamaVer.Text = $"b{r.Build} установлен";
+                BtnLlamaUpd.Content = L.T("Проверить");
+                LlamaVer.Text = L.F("b{0} установлен", r.Build);
             }
-            catch (Exception ex) { Error("Не удалось установить: " + ex.Message); }
+            catch (Exception ex) { Error(L.T("Не удалось установить: ") + ex.Message); }
             finally { BtnLlamaUpd.IsEnabled = true; }
         }
 
@@ -1626,31 +1711,31 @@ namespace QwenStudio
         {
             if (webLatest != null)
             {
-                if (!Ask($"Обновить Open WebUI до {webLatest} через uv? Это займёт пару минут." + (webStatus > 0 ? "\n\nOpen WebUI сейчас работает — он будет остановлен." : ""))) return;
+                if (!Ask(L.F("Обновить Open WebUI до {0} через uv? Это займёт пару минут.", webLatest) + (webStatus > 0 ? L.T("\n\nOpen WebUI сейчас работает — он будет остановлен.") : ""))) return;
                 if (webStatus > 0) { await webui.Stop(); webStatus = 0; }
                 BtnWebUpd.IsEnabled = false;
-                srv.Emit("Обновляю Open WebUI…");
+                srv.Emit(L.T("Обновляю Open WebUI…"));
                 var (code, _) = await Updates.UpgradeWebUi(l => incoming.Enqueue(new LogLine { Time = DateTime.Now.ToString("HH:mm:ss"), Text = "uv: " + l, Kind = LogKind.Server, Important = false }));
-                srv.Emit(code == 0 ? "Open WebUI обновлён." : $"uv завершился с кодом {code}.", code == 0 ? LogKind.Good : LogKind.Error);
+                srv.Emit(code == 0 ? L.T("Open WebUI обновлён.") : L.F("uv завершился с кодом {0}.", code), code == 0 ? LogKind.Good : LogKind.Error);
                 webLatest = null;
-                BtnWebUpd.Content = "Проверить";
+                BtnWebUpd.Content = L.T("Проверить");
                 BtnWebUpd.IsEnabled = true;
             }
             BtnWebUpd.IsEnabled = false;
-            WebVer.Text = "проверяю…";
+            WebVer.Text = L.T("проверяю…");
             var localTask = Updates.LocalWebUi();
             var remote = await Updates.LatestWebUi();
             var local = await localTask;
             BtnWebUpd.IsEnabled = true;
-            if (local == null) { WebVer.Text = "не установлен через uv"; return; }
-            if (remote == null) { WebVer.Text = $"установлен {local} · PyPI недоступен"; return; }
+            if (local == null) { WebVer.Text = L.T("не установлен через uv"); return; }
+            if (remote == null) { WebVer.Text = L.F("установлен {0} · PyPI недоступен", local); return; }
             if (remote != local)
             {
                 webLatest = remote;
-                WebVer.Text = $"установлен {local} · доступен {remote}";
-                BtnWebUpd.Content = $"Обновить до {remote}";
+                WebVer.Text = L.F("установлен {0} · доступен {1}", local, remote);
+                BtnWebUpd.Content = L.F("Обновить до {0}", remote);
             }
-            else WebVer.Text = $"{local} — последняя версия";
+            else WebVer.Text = L.F("{0} — последняя версия", local);
         }
 
         void ProfilesEdit_Click(object sender, RoutedEventArgs e)
@@ -1663,7 +1748,7 @@ namespace QwenStudio
             var keep = selected?.Id;
             LoadProfiles();
             Select(profiles.FirstOrDefault(p => p.Id == keep));
-            srv.Emit($"Профили перечитаны: {profiles.Count}.");
+            srv.Emit(L.F("Профили перечитаны: {0}.", profiles.Count));
         }
 
         void OpenFolder_Click(object sender, RoutedEventArgs e) => Proc.Open(Paths.Base);
@@ -1675,13 +1760,13 @@ namespace QwenStudio
         {
             if (closingForReal || !ServerUp) return;
             var r = MessageBox.Show(this,
-                "Сервер модели продолжит работать в фоне — клиенты не отключатся, а при следующем запуске Qwen Studio подхватит его.\n\nОстановить сервер перед выходом?",
+                L.T("Сервер модели продолжит работать в фоне — клиенты не отключатся, а при следующем запуске Qwen Studio подхватит его.\n\nОстановить сервер перед выходом?"),
                 "Qwen Studio", MessageBoxButton.YesNoCancel, MessageBoxImage.Question, MessageBoxResult.No);
             if (r == MessageBoxResult.Cancel) { e.Cancel = true; return; }
             if (r == MessageBoxResult.Yes)
             {
                 e.Cancel = true;
-                if (!await ConfirmInterrupt("Остановить сервер и выйти")) return;
+                if (!await ConfirmInterrupt(L.T("Остановить сервер и выйти"))) return;
                 await Stop("exit");
                 closingForReal = true;
                 Close();
@@ -1705,9 +1790,30 @@ namespace QwenStudio
         void OnThemeChanged()
         {
             BtnTheme.Content = Theme.IsDark ? "" : "";     // sun / moon
-            BtnTheme.ToolTip = Theme.IsDark ? "Светлая тема" : "Тёмная тема";
+            BtnTheme.ToolTip = Theme.IsDark ? L.T("Светлая тема") : L.T("Тёмная тема");
             (Theme.Mode switch { ThemeMode.Light => ThemeLight, ThemeMode.Dark => ThemeDark, _ => ThemeSystem }).IsChecked = true;
             if (new WindowInteropHelper(this).Handle != IntPtr.Zero) DarkTitleBar();
+        }
+
+        /// <summary>Interface language, live: XAML texts via L.Apply, everything code writes by re-running what writes it. The log keeps its language.</summary>
+        void Lang_Checked(object sender, RoutedEventArgs e)
+        {
+            var lang = (string)((FrameworkElement)sender).Tag;
+            if (!IsLoaded || lang == L.Current) return;
+            L.Set(lang);
+            try { ui.Set("LANG", lang); } catch { }
+            L.Apply(this);
+            if (File.Exists(Paths.OpencodeDesktop)) TxtOpencodeKind.Text = L.T("приложение для ПК");
+            ChartTitle.Text = liveMode ? L.T("НАГРУЗКА ЗА 5 МИНУТ") : L.T("НАГРУЗКА ЗА 24 ЧАСА");
+            ChartAxis.Tag = null;
+            if (liveMode) RenderLive(); else RenderChart();
+            LoadProfiles();
+            ShowModels();
+            ShowOptions();
+            FillSettings();
+            OnThemeChanged();
+            Tab_Checked(null, null);
+            UpdateUi();
         }
 
         [DllImport("dwmapi.dll")] static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
@@ -1734,10 +1840,10 @@ namespace QwenStudio
         void Error(string text) => MessageBox.Show(this, text, "Qwen Studio", MessageBoxButton.OK, MessageBoxImage.Warning);
 
         static string Elapsed(TimeSpan t) =>
-            t.TotalHours >= 1 ? $"{(int)t.TotalHours} ч {t.Minutes} мин" : t.TotalMinutes >= 1 ? $"{(int)t.TotalMinutes} мин {t.Seconds} с" : $"{t.Seconds} с";
+            t.TotalHours >= 1 ? L.F("{0} ч {1} мин", (int)t.TotalHours, t.Minutes) : t.TotalMinutes >= 1 ? L.F("{0} мин {1} с", (int)t.TotalMinutes, t.Seconds) : L.F("{0} с", t.Seconds);
 
         static string Ago(TimeSpan t) =>
-            t.TotalSeconds < 60 ? $"{Math.Max(1, (int)t.TotalSeconds)} с" : t.TotalMinutes < 60 ? $"{(int)t.TotalMinutes} мин" : $"{(int)t.TotalHours} ч {t.Minutes} мин";
+            t.TotalSeconds < 60 ? L.F("{0} с", Math.Max(1, (int)t.TotalSeconds)) : t.TotalMinutes < 60 ? L.F("{0} мин", (int)t.TotalMinutes) : L.F("{0} ч {1} мин", (int)t.TotalHours, t.Minutes);
 
         static T FindChild<T>(DependencyObject root) where T : DependencyObject
         {

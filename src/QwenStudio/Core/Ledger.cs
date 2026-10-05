@@ -13,10 +13,14 @@ namespace QwenStudio.Core
     /// <summary>One minute of server life in logs\studio\stats.jsonl (only minutes when the server was up).</summary>
     public sealed class MinuteStat
     {
-        [JsonPropertyName("ts")] public string Ts { get; set; }
+        string ts;
+        DateTime? at;
+        [JsonPropertyName("ts")] public string Ts { get => ts; set { ts = value; at = null; } }
         [JsonPropertyName("up")] public bool Up { get; set; }
         [JsonPropertyName("profile")] public string Profile { get; set; }
         [JsonPropertyName("old")] public bool Old { get; set; }
+        /// <summary>"uncensored" for the third model; absent for the main and old ones (they have "old").</summary>
+        [JsonPropertyName("model"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string Model { get; set; }
         [JsonPropertyName("req")] public int Req { get; set; }
         [JsonPropertyName("gen")] public long Gen { get; set; }
         [JsonPropertyName("busy")] public int Busy { get; set; }
@@ -24,16 +28,20 @@ namespace QwenStudio.Core
         [JsonPropertyName("vram")] public int Vram { get; set; }
         [JsonPropertyName("rej")] public int Rej { get; set; }
 
-        [JsonIgnore] public DateTime At => DateTime.ParseExact(Ts, "yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
+        [JsonIgnore] public DateTime At => at ??= DateTime.ParseExact(Ts, "yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
     }
 
     /// <summary>A server lifecycle event in logs\studio\sessions.jsonl — the crash ledger that failure_report.py reads.</summary>
     public sealed class SessionEvent
     {
-        [JsonPropertyName("ts")] public string Ts { get; set; }
+        string ts;
+        DateTime? at;
+        [JsonPropertyName("ts")] public string Ts { get => ts; set { ts = value; at = null; } }
         [JsonPropertyName("event")] public string Event { get; set; }
         [JsonPropertyName("profile")] public string Profile { get; set; }
         [JsonPropertyName("old")] public bool Old { get; set; }
+        /// <summary>"uncensored" for the third model; absent for the main and old ones (they have "old").</summary>
+        [JsonPropertyName("model"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string Model { get; set; }
         [JsonPropertyName("build")] public string Build { get; set; }
         [JsonPropertyName("driver")] public string Driver { get; set; }
         [JsonPropertyName("pid")] public int Pid { get; set; }
@@ -41,7 +49,7 @@ namespace QwenStudio.Core
         [JsonPropertyName("requests")] public int Requests { get; set; }
         [JsonPropertyName("reason")] public string Reason { get; set; }
 
-        [JsonIgnore] public DateTime At => DateTime.ParseExact(Ts, "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+        [JsonIgnore] public DateTime At => at ??= DateTime.ParseExact(Ts, "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
         [JsonIgnore] public bool IsFailure => Event is "crash" or "cuda";
     }
 
@@ -102,13 +110,13 @@ namespace QwenStudio.Core
         static DateTime Minute(DateTime t) => new(t.Year, t.Month, t.Day, t.Hour, t.Minute, 0, t.Kind);
 
         /// <summary>Reads the files and fills gaps from the server logs. Call once, off the UI thread.</summary>
-        public void Load(string fallbackModelName, string liveLog)
+        public void Load(string fallbackModelName, string uncensoredModelName, string liveLog)
         {
             foreach (var e in ReadJsonl<SessionEvent>(SessionsFile)) Events.Add(e);
             var all = ReadJsonl<MinuteStat>(StatsFile);
             var now = DateTime.Now;
             var from = all.Count > 0 ? all[^1].At.AddMinutes(1) : now.AddDays(-7);
-            var filled = Backfill(from, Minute(now), fallbackModelName, liveLog);
+            var filled = Backfill(from, Minute(now), fallbackModelName, uncensoredModelName, liveLog);
             if (filled.Count > 0)
             {
                 Append(StatsFile, filled);
@@ -142,7 +150,7 @@ namespace QwenStudio.Core
             if (up)
             {
                 m.Up = true;
-                if (p != null) { m.Profile = p.Id; m.Old = p.Old; }
+                if (p != null) { m.Profile = p.Id; m.Old = p.Old; m.Model = ExtraSlot(p); }
                 m.Busy = Math.Max(m.Busy, busy);
                 m.Slots = Math.Max(m.Slots, slots);
                 m.Vram = Math.Max(m.Vram, vramMiB);
@@ -182,7 +190,7 @@ namespace QwenStudio.Core
             var e = new SessionEvent
             {
                 Ts = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture), Event = ev,
-                Profile = p?.Id, Old = p?.Old ?? false, Build = build, Driver = driver, Pid = pid,
+                Profile = p?.Id, Old = p?.Old ?? false, Model = p == null ? null : ExtraSlot(p), Build = build, Driver = driver, Pid = pid,
                 UptimeMin = Math.Round(uptimeMin, 1), Requests = requests, Reason = reason,
             };
             Events.Add(e);
@@ -193,7 +201,10 @@ namespace QwenStudio.Core
         IEnumerable<MinuteStat> Minutes => recent.Concat(open.Values);
 
         /// <summary>Toggles are not modes: minutes of the former «Без размышлений» and «Зрение» cards count as «Чат».</summary>
-        public static string ModeOf(MinuteStat m) => (Profile.BaseId(m.Profile) ?? "?") + (m.Old ? "|old" : "");
+        public static string ModeOf(MinuteStat m) => (Profile.BaseId(m.Profile) ?? "?") + (m.Old ? "|old" : m.Model == Profile.UncensoredSlot ? "|uncensored" : "");
+
+        /// <summary>What goes into "model": only the slot the "old" flag cannot say.</summary>
+        static string ExtraSlot(Profile p) => p.Slot == Profile.UncensoredSlot ? p.Slot : null;
 
         void Fold(MinuteStat m)
         {
@@ -261,7 +272,7 @@ namespace QwenStudio.Core
         /// Rebuilds minutes in [from, to) from Studio's server logs: what the server served and when it was up.
         /// A finished log counts as up from its first to its last line (idle time after that is unknown).
         /// </summary>
-        static List<MinuteStat> Backfill(DateTime from, DateTime to, string fallbackModelName, string liveLog)
+        static List<MinuteStat> Backfill(DateTime from, DateTime to, string fallbackModelName, string uncensoredModelName, string liveLog)
         {
             var minutes = new SortedDictionary<DateTime, MinuteStat>();
             if (from >= to) return new();
@@ -274,6 +285,7 @@ namespace QwenStudio.Core
                     if (!nm.Success) continue;
                     var start = DateTime.ParseExact(nm.Groups[2].Value, "yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
                     bool old = false;
+                    string model = null;
                     int gen = 0;
                     DateTime? prev = null;
                     using var fs = new FileStream(f, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
@@ -285,6 +297,7 @@ namespace QwenStudio.Core
                         if (!m.Success) continue;
                         var at = start + new TimeSpan(0, 0, int.Parse(m.Groups[1].Value), int.Parse(m.Groups[2].Value), int.Parse(m.Groups[3].Value));
                         if (!string.IsNullOrEmpty(fallbackModelName) && l.Contains(fallbackModelName)) old = true;
+                        if (!string.IsNullOrEmpty(uncensoredModelName) && l.Contains(uncensoredModelName)) model = Profile.UncensoredSlot;
                         Match g;
                         if ((g = rxGen.Match(l)).Success) gen = int.Parse(g.Groups[1].Value);
                         // every minute between two log lines was up — the process was alive to write the second one
@@ -303,7 +316,7 @@ namespace QwenStudio.Core
                     MinuteStat Get(DateTime k)
                     {
                         if (!minutes.TryGetValue(k, out var s))
-                            minutes[k] = s = new MinuteStat { Ts = k.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture), Profile = nm.Groups[1].Value, Old = old };
+                            minutes[k] = s = new MinuteStat { Ts = k.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture), Profile = nm.Groups[1].Value, Old = old, Model = model };
                         return s;
                     }
                 }

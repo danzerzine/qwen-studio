@@ -114,6 +114,8 @@ namespace QwenStudio.Core
             public DateTime Started { get; set; }
             public int Port { get; set; }
             public bool Old { get; set; }
+            /// <summary>Model slot ("main", "old", "uncensored"); absent in files written before the third model.</summary>
+            public string Model { get; set; }
             /// <summary>Toggles of the running variant; absent in files written before them.</summary>
             public bool? Vision { get; set; }
             public bool? Think { get; set; }
@@ -128,18 +130,18 @@ namespace QwenStudio.Core
             try
             {
                 var st = File.Exists(Paths.State) ? JsonSerializer.Deserialize<StateFile>(File.ReadAllText(Paths.State)) : null;
-                var mine = st == null ? null : Process.GetProcessesByName("llama-server").FirstOrDefault(p => p.Id == st.Pid);
+                var mine = st == null ? null : Process.GetProcessesByName("llama-server").FirstOrDefault(p => p.Id == st.Pid && StartedAt(p, st.Started));
                 if (mine == null) TryDelete(Paths.State);
                 else
                 {
                     Watch(mine);
-                    Profile = Profile.Resolve(profiles, st.Profile, st.Old, st.Vision, st.Think);
+                    Profile = Profile.Resolve(profiles, st.Profile, st.Model ?? (st.Old ? Profile.OldSlot : Profile.MainSlot), st.Vision, st.Think);
                     LogFile = st.Log; Since = st.Started; Port = st.Port;
                     State = ServerState.Starting;          // the health poll promotes it to Running
                     Attached = true;
                     countFrom = DateTime.Now;
                     StartTail(fromEnd: true);
-                    Emit($"Подключился к работающему серверу: {Profile?.Title ?? st.Profile}, PID {Pid}");
+                    Emit(L.F("Подключился к работающему серверу: {0}, PID {1}", Profile?.Title ?? st.Profile, Pid));
                     return;
                 }
             }
@@ -151,7 +153,13 @@ namespace QwenStudio.Core
             State = ServerState.External;
             Attached = true;
             try { Build = BuildOf(Process.GetProcessById(Pid).MainModule?.FileName); } catch { Build = null; }
-            Emit($"На порту {port} работает llama-server, запущенный не отсюда (PID {Pid}). Его можно остановить кнопкой «Остановить».", LogKind.Warn);
+            Emit(L.F("На порту {0} работает llama-server, запущенный не отсюда (PID {1}). Его можно остановить кнопкой «Остановить».", port, Pid), LogKind.Warn);
+        }
+
+        /// <summary>The state file is written right after Process.Start; a reused PID belongs to a process started later.</summary>
+        static bool StartedAt(Process p, DateTime started)
+        {
+            try { return Math.Abs((p.StartTime - started).TotalSeconds) < 60; } catch { return false; }
         }
 
         /// <summary>Process name of whoever listens on the port, or null if it is free.</summary>
@@ -165,10 +173,10 @@ namespace QwenStudio.Core
         public void Start(Profile p, Settings cfg)
         {
             string exe = cfg.ServerExe(p), model = cfg.ModelFile(p);
-            if (!File.Exists(exe)) throw new FileNotFoundException($"Не найден сервер: {exe}");
-            if (!File.Exists(model)) throw new FileNotFoundException($"Не найдена модель: {model}");
+            if (!File.Exists(exe)) throw new FileNotFoundException(L.F("Не найден сервер: {0}", exe));
+            if (!File.Exists(model)) throw new FileNotFoundException(L.F("Не найдена модель: {0}", model));
             string mmproj = cfg.MmprojFile(p);
-            if (mmproj != null && !File.Exists(mmproj)) throw new FileNotFoundException($"Не найден модуль зрения: {mmproj}");
+            if (mmproj != null && !File.Exists(mmproj)) throw new FileNotFoundException(L.F("Не найден модуль зрения: {0}", mmproj));
 
             Port = cfg.Port;
             LogFile = Path.Combine(Paths.Logs, $"server-{p.Id}-{DateTime.Now:yyyyMMdd-HHmmss}.log");
@@ -198,7 +206,7 @@ namespace QwenStudio.Core
             Profile = p;
             Since = DateTime.Now;
             State = ServerState.Starting;
-            File.WriteAllText(Paths.State, JsonSerializer.Serialize(new StateFile { Pid = Pid, Profile = p.Id, Log = LogFile, Started = Since, Port = Port, Old = p.Old, Vision = p.Sees, Think = p.Thinks }));
+            File.WriteAllText(Paths.State, JsonSerializer.Serialize(new StateFile { Pid = Pid, Profile = p.Id, Log = LogFile, Started = Since, Port = Port, Old = p.Old, Model = p.Slot, Vision = p.Sees, Think = p.Thinks }));
             Emit($"▶ {p.Title} ({p.Badge}) · {Path.GetFileName(model)} · {Path.GetFileName(Path.GetDirectoryName(exe))} · PID {Pid}");
             StartTail(fromEnd: false);
         }
@@ -220,13 +228,16 @@ namespace QwenStudio.Core
             stopping = true;
             tail?.Cancel();
             int pid = Pid;
+            var held = proc;
             await Task.Run(() =>
             {
                 if (pid == 0) return;
                 try
                 {
-                    var p = Process.GetProcessById(pid);
-                    if (p.ProcessName != "llama-server") return;       // PID reused by something else
+                    // our own process: its handle stays valid even if the PID gets reused
+                    var p = held != null && held.Id == pid ? held : Process.GetProcessById(pid);
+                    if (p.HasExited) return;
+                    if (p != held && p.ProcessName != "llama-server") return;       // PID reused by something else
                     p.Kill(entireProcessTree: true);
                     p.WaitForExit(8000);
                 }
@@ -252,11 +263,12 @@ namespace QwenStudio.Core
                 p.Exited += (_, _) =>
                 {
                     if (stopping || proc != p) return;
+                    Pid = 0;            // the PID is free for reuse now: Stop must not kill whatever gets it
                     string code = "";
-                    try { code = $" с кодом {p.ExitCode}"; ExitInfo = $"exit {p.ExitCode}"; } catch { ExitInfo = "exit"; }
+                    try { code = L.F(" с кодом {0}", p.ExitCode); ExitInfo = $"exit {p.ExitCode}"; } catch { ExitInfo = "exit"; }
                     State = ServerState.Crashed;
                     TryDelete(Paths.State);
-                    Emit($"Сервер неожиданно завершился{code}. Последние строки журнала — выше.", LogKind.Error);
+                    Emit(L.F("Сервер неожиданно завершился{0}. Последние строки журнала — выше.", code), LogKind.Error);
                     Exited?.Invoke();
                 };
             }
@@ -281,6 +293,8 @@ namespace QwenStudio.Core
                 long pos = -1;
                 var pending = new StringBuilder();
                 var buf = new byte[1 << 16];
+                var chars = new char[Encoding.UTF8.GetMaxCharCount(buf.Length)];
+                var utf8 = Encoding.UTF8.GetDecoder();
                 while (!cts.IsCancellationRequested)
                 {
                     try
@@ -289,13 +303,13 @@ namespace QwenStudio.Core
                         {
                             using var fs = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
                             if (pos < 0) pos = fromEnd ? Math.Max(0, fs.Length - 48 * 1024) : 0;
-                            if (fs.Length < pos) pos = 0;
+                            if (fs.Length < pos) { pos = 0; utf8.Reset(); pending.Clear(); }
                             fs.Position = pos;
                             int n;
-                            while ((n = fs.Read(buf, 0, buf.Length)) > 0)
+                            while (!cts.IsCancellationRequested && (n = fs.Read(buf, 0, buf.Length)) > 0)
                             {
                                 pos += n;
-                                pending.Append(Encoding.UTF8.GetString(buf, 0, n));
+                                pending.Append(chars, 0, utf8.GetChars(buf, 0, n, chars, 0));
                                 var text = pending.ToString();
                                 int last = text.LastIndexOf('\n');
                                 if (last < 0) continue;
@@ -335,7 +349,7 @@ namespace QwenStudio.Core
             if (low.Contains("illegal memory access") || low.Contains("cuda error"))
             {
                 kind = LogKind.Error;
-                if (!stopping) CudaError?.Invoke();
+                if (live && !stopping) CudaError?.Invoke();
             }
             else if (low.Contains("error") || low.Contains("failed") || low.Contains("exception") || low.Contains("out of memory")) kind = LogKind.Error;
             else if (low.Contains("warn")) kind = LogKind.Warn;

@@ -34,17 +34,18 @@ namespace QwenStudio.Core
 
         IntPtr dev;
         string name = "GPU";
-        bool ready, failed;
+        bool ready;
+        long retryAt;       // after a failure (driver reset, TDR) NVML is re-initialised no sooner than this (TickCount64)
 
         public GpuSample Read()
         {
             var s = new GpuSample();
-            if (failed) return s;
+            if (!ready && Environment.TickCount64 < retryAt) return s;
             try
             {
                 if (!ready)
                 {
-                    if (Init() != 0 || Handle(0, out dev) != 0) { failed = true; return s; }
+                    if (Init() != 0 || Handle(0, out dev) != 0) { retryAt = Environment.TickCount64 + 30000; return s; }
                     var buf = new byte[96];
                     if (GetName(dev, buf, (uint)buf.Length) == 0) name = Encoding.ASCII.GetString(buf).TrimEnd('\0').Replace("NVIDIA GeForce ", "");
                     var drv = new byte[80];
@@ -52,14 +53,15 @@ namespace QwenStudio.Core
                     ready = true;
                 }
                 s.Name = name;
-                if (GetMem(dev, out var m) == 0) { s.UsedMiB = m.Used / 1048576.0; s.TotalMiB = m.Total / 1048576.0; }
+                if (GetMem(dev, out var m) != 0) { ready = false; retryAt = Environment.TickCount64 + 30000; return s; }   // handle is stale: re-init later
+                s.UsedMiB = m.Used / 1048576.0; s.TotalMiB = m.Total / 1048576.0;
                 if (GetPower(dev, out var p) == 0) s.PowerW = p / 1000.0;
                 if (GetLimit(dev, out var l) == 0) s.LimitW = l / 1000.0;
                 if (GetTemp(dev, 0, out var t) == 0) s.TempC = (int)t;
                 if (GetUtil(dev, out var u) == 0) s.Util = (int)u.Gpu;
                 s.Ok = s.TotalMiB > 0;
             }
-            catch (Exception) { failed = true; }
+            catch (Exception) { ready = false; retryAt = Environment.TickCount64 + 30000; }   // e.g. nvml.dll missing: one throw per 30 s
             return s;
         }
     }

@@ -18,10 +18,30 @@
             <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
                 <Border Style="{StaticResource Segments}">
                     <StackPanel Orientation="Horizontal">
-                        <RadioButton x:Name="TabOverview" Style="{StaticResource Tab}" GroupName="page" Content="Обзор" IsChecked="True" Checked="Tab_Checked"/>
-                        <RadioButton x:Name="TabLog" Style="{StaticResource Tab}" GroupName="page" Content="Журнал" Checked="Tab_Checked"/>
-                        <RadioButton x:Name="TabStats" Style="{StaticResource Tab}" GroupName="page" Content="Статистика" Checked="Tab_Checked"/>
-                        <RadioButton x:Name="TabSettings" Style="{StaticResource Tab}" GroupName="page" Content="Настройки" Checked="Tab_Checked"/>
+                        <RadioButton x:Name="TabOverview" Style="{StaticResource Tab}" GroupName="page" IsChecked="True" Checked="Tab_Checked">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Style="{StaticResource Icon}" FontSize="{StaticResource IconS}" Text="&#xE80F;" Margin="{StaticResource GapRightS}"/>
+                                <TextBlock Text="Обзор" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </RadioButton>
+                        <RadioButton x:Name="TabLog" Style="{StaticResource Tab}" GroupName="page" Checked="Tab_Checked">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Style="{StaticResource Icon}" FontSize="{StaticResource IconS}" Text="&#xE9F9;" Margin="{StaticResource GapRightS}"/>
+                                <TextBlock Text="Журнал" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </RadioButton>
+                        <RadioButton x:Name="TabStats" Style="{StaticResource Tab}" GroupName="page" Checked="Tab_Checked">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Style="{StaticResource Icon}" FontSize="{StaticResource IconS}" Text="&#xE9D2;" Margin="{StaticResource GapRightS}"/>
+                                <TextBlock Text="Статистика" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </RadioButton>
+                        <RadioButton x:Name="TabSettings" Style="{StaticResource Tab}" GroupName="page" Checked="Tab_Checked">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Style="{StaticResource Icon}" FontSize="{StaticResource IconS}" Text="&#xE713;" Margin="{StaticResource GapRightS}"/>
+                                <TextBlock Text="Настройки" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </RadioButton>
                     </StackPanel>
                 </Border>
                 <Button x:Name="BtnTheme" Style="{StaticResource IconBtn}" FontSize="{StaticResource IconL}" Margin="{StaticResource GapLeftS}" Click="ThemeToggle_Click"/>
@@ -95,11 +115,12 @@
 
                 <StackPanel DockPanel.Dock="Top">
                     <TextBlock Text="МОДЕЛЬ" Style="{StaticResource Caption}"/>
-                    <Border Style="{StaticResource Segments}" Margin="{StaticResource GapBelow}">
-                        <UniformGrid Columns="2">
+                    <Border Style="{StaticResource Segments}" Margin="{StaticResource GapBelow}" HorizontalAlignment="Left">
+                        <StackPanel Orientation="Horizontal">
                             <RadioButton x:Name="ModelMain" Style="{StaticResource Tab}" GroupName="model" Content="Основная" HorizontalContentAlignment="Center" Checked="Model_Checked"/>
                             <RadioButton x:Name="ModelOld" Style="{StaticResource Tab}" GroupName="model" Content="Запасная" HorizontalContentAlignment="Center" Checked="Model_Checked"/>
-                        </UniformGrid>
+                            <RadioButton x:Name="ModelUncensored" Style="{StaticResource Tab}" GroupName="model" Content="Без цензуры" HorizontalContentAlignment="Center" Checked="Model_Checked" ToolTipService.ShowOnDisabled="True"/>
+                        </StackPanel>
                     </Border>
                     <TextBlock Text="РЕЖИМ" Style="{StaticResource Caption}"/>
                 </StackPanel>
@@ -428,7 +449,7 @@
                                         <Ellipse x:Name="d" Style="{StaticResource Dot}" Margin="{StaticResource GapLeftS}" Visibility="Hidden"/>
                                     </StackPanel>
                                     <TextBlock x:Name="t" Grid.Column="1" Text="{Binding Text}" TextWrapping="Wrap"
-                                               FontFamily="{StaticResource Mono}" FontSize="12" Foreground="{DynamicResource LogText}"/>
+                                               Style="{StaticResource MonoText}" Foreground="{DynamicResource LogText}"/>
                                 </Grid>
                                 <DataTemplate.Triggers>
                                     <DataTrigger Binding="{Binding Kind}" Value="Info">
@@ -512,6 +533,19 @@
                         </DockPanel>
                     </Border>
 
+                    <!-- language names stay in their own language: whoever cannot read the current one still finds theirs -->
+                    <Border Style="{StaticResource Card}" Margin="{StaticResource GapBelow}">
+                        <DockPanel>
+                            <Border DockPanel.Dock="Right" Style="{StaticResource Segments}" VerticalAlignment="Center">
+                                <StackPanel Orientation="Horizontal">
+                                    <RadioButton x:Name="LangRu" Style="{StaticResource Tab}" GroupName="lang" Content="Русский" Tag="ru" Checked="Lang_Checked"/>
+                                    <RadioButton x:Name="LangEn" Style="{StaticResource Tab}" GroupName="lang" Content="English" Tag="en" Checked="Lang_Checked"/>
+                                </StackPanel>
+                            </Border>
+                            <TextBlock Text="Язык" Style="{StaticResource Title}" VerticalAlignment="Center"/>
+                        </DockPanel>
+                    </Border>
+
                     <Border Style="{StaticResource Card}" Margin="{StaticResource GapBelow}">
                         <StackPanel>
                             <TextBlock Text="Автозапуск" Style="{StaticResource Title}" Margin="{StaticResource GapBelowS}"/>
@@ -552,7 +586,8 @@
                                 <TextBlock x:Name="LanIpText" Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Style="{StaticResource MonoText}"/>
                                 <TextBlock Grid.Row="2" Text="Брандмауэр" Style="{StaticResource Label}" VerticalAlignment="Center"/>
                                 <StackPanel Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" Orientation="Horizontal">
-                                    <TextBlock x:Name="FwText" Text="проверяю…" VerticalAlignment="Center" Foreground="{DynamicResource Muted}"/>
+                                    <Ellipse x:Name="FwDot" Style="{StaticResource Dot}"/>
+                                    <TextBlock x:Name="FwText" Text="проверяю…" Style="{StaticResource Label}" VerticalAlignment="Center" Margin="{StaticResource GapLeftS}"/>
                                     <Button x:Name="BtnFw" Content="Открыть порты" Margin="{StaticResource GapLeft}" Click="Firewall_Click"/>
                                 </StackPanel>
                             </Grid>

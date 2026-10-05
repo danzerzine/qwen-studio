@@ -32,8 +32,10 @@ Studio вырос вокруг Qwen3.8-27B на видеокарте с 16 ГБ,
 - **Режимы одной кнопкой.** Агент, чат и параллельные запросы, а под ними тумблеры «Зрение» и
   «Размышления». Режим — это набор аргументов llama-server в `profiles.json`. Переключение перезапускает
   сервер. Если идёт запрос, Studio сначала спросит.
-- **Основная и запасная модель.** Любой режим можно запустить на второй модели: например, на прошлой
-  проверенной версии, если новая ведёт себя странно.
+- **Основная, запасная и модель без цензуры.** Любой режим можно запустить на второй модели: например,
+  на прошлой проверенной версии, если новая ведёт себя странно. Третий слот — дообученная версия основной
+  модели без цензуры.
+- **Русский и английский интерфейс.** Язык переключается в «Настройки → Язык» без перезапуска.
 - **Видно, что происходит.** Скорость генерации и промпта, занятые слоты, память, загрузка, питание и
   температура видеокарты. Живой график за 5 минут, история за 24 часа и статистика по дням.
 - **Видеопамять одна на всех.** Перед стартом Studio выгружает модели Ollama, LM Studio и ComfyUI, чтобы две
@@ -114,6 +116,10 @@ logs\studio\           журналы сервера, статистика, на
 `FALLBACK_SERVER_EXE`, если он задан). Для запасной модели Studio убирает аргументы `--spec-*`,
 ограничивает контекст 96K и выключает кэш промпта. Так проще откатиться на старую модель или сборку.
 
+Кнопка **Без цензуры** запускает тот же режим на `UNCENSORED_MODEL_PATH`. Это должна быть дообученная
+версия основной модели той же архитектуры: сервер, MTP и аргументы остаются как у основной, меняются
+только веса. Пока путь не задан, кнопка неактивна.
+
 Значения по умолчанию (`-ctk/-ctv q4_0`, `-ngl 999`, `--fit off`) рассчитаны на модель ~27B в Q3/IQ4
 на карте с 16 ГБ. Для другой связки подберите `ctx`, тип KV-кэша и `-np`. Если модель и сборка
 llama.cpp поддерживают MTP, добавьте в `args` `"--spec-type", "draft-mtp", "--spec-draft-n-max", "1"`:
@@ -177,6 +183,7 @@ ComfyUI выгрузить модели. Во время генерации Stud
 | `WEBUI_PORT` | порт Open WebUI |
 | `SERVER_EXE`, `MODEL_PATH` | llama-server и модель; пустой `SERVER_EXE` — самая свежая `llama-bNNNN\` |
 | `FALLBACK_SERVER_EXE`, `FALLBACK_MODEL_PATH` | запасная сборка и модель |
+| `UNCENSORED_MODEL_PATH` | модель без цензуры (дообученная основная) |
 | `MMPROJ_PATH` | модуль зрения для тумблера «Зрение» |
 | `COMFYUI_DIR`, `COMFYUI_ARGS` | ComfyUI и его дополнительные аргументы |
 | `POWER_LIMIT_W` | лимит мощности видеокарты для кнопки в «Обслуживании»; пусто — кнопки нет |
@@ -242,8 +249,9 @@ around Qwen3.8-27B on a 16 GB graphics card, and the default modes are tuned for
 - **One-click modes.** Agent, chat and parallel requests, with *Зрение* (Vision) and *Размышления*
   (Thinking) toggles under them. A mode is a set of llama-server arguments in `profiles.json`. Switching
   modes restarts the server. If a request is in progress, Studio asks first.
-- **Main and fallback model.** Any mode can run on a second model: for example, the previous proven
-  version when a new one misbehaves.
+- **Main, fallback and uncensored model.** Any mode can run on a second model: for example, the previous
+  proven version when a new one misbehaves. A third slot holds an uncensored fine-tune of the main model.
+- **English or Russian interface.** Switch the language in *Settings → Language*; no restart needed.
 - **See what is going on.** Generation and prompt speed, busy slots, and GPU memory, load, power and
   temperature. A live 5-minute chart, 24-hour history and daily statistics.
 - **One card, one model.** Before starting, Studio unloads Ollama, LM Studio and ComfyUI models so two
@@ -326,6 +334,10 @@ The **Основная / Запасная** (Main / Fallback) switch runs the sa
 `FALLBACK_SERVER_EXE`, if set). For the fallback model Studio drops `--spec-*` arguments, caps the context
 at 96K and turns off the prompt cache. This makes it easy to roll back to an older model or build.
 
+The **Uncensored** button runs the same mode on `UNCENSORED_MODEL_PATH`. It should be a fine-tune of the
+main model with the same architecture: the server, MTP and arguments stay as for the main model, only the
+weights change. The button is disabled until the path is set.
+
 The defaults (`-ctk/-ctv q4_0`, `-ngl 999`, `--fit off`) are sized for a ~27B model in Q3/IQ4 on a 16 GB
 card. For another setup, tune `ctx`, the KV cache type and `-np`. If your model and llama.cpp build support
 MTP, add `"--spec-type", "draft-mtp", "--spec-draft-n-max", "1"` to `args` to speed up generation.
@@ -388,6 +400,7 @@ All settings live in `server_config.env`. The full list with comments is in
 | `WEBUI_PORT` | Open WebUI port |
 | `SERVER_EXE`, `MODEL_PATH` | llama-server and the model; an empty `SERVER_EXE` means the newest `llama-bNNNN\` |
 | `FALLBACK_SERVER_EXE`, `FALLBACK_MODEL_PATH` | fallback build and model |
+| `UNCENSORED_MODEL_PATH` | uncensored model (a fine-tune of the main one) |
 | `MMPROJ_PATH` | vision projector for the *Зрение* (Vision) toggle |
 | `COMFYUI_DIR`, `COMFYUI_ARGS` | ComfyUI folder and extra arguments |
 | `POWER_LIMIT_W` | GPU power limit for the button in Maintenance; empty hides the button |

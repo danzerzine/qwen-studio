@@ -18,13 +18,17 @@ namespace QwenStudio.Core
         [DllImport("user32.dll")] static extern bool CloseClipboard();
         [DllImport("user32.dll")] static extern bool EmptyClipboard();
         [DllImport("user32.dll")] static extern IntPtr SetClipboardData(uint format, IntPtr mem);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern uint RegisterClipboardFormat(string name);
         [DllImport("kernel32.dll")] static extern IntPtr GlobalAlloc(uint flags, UIntPtr bytes);
         [DllImport("kernel32.dll")] static extern IntPtr GlobalLock(IntPtr mem);
         [DllImport("kernel32.dll")] static extern bool GlobalUnlock(IntPtr mem);
         [DllImport("kernel32.dll")] static extern IntPtr GlobalFree(IntPtr mem);
 
-        /// <summary>Returns false if another app kept the clipboard open for the whole ~200 ms of retries.</summary>
-        public static bool Set(string text)
+        /// <summary>
+        /// Returns false if another app kept the clipboard open for the whole ~200 ms of retries.
+        /// secret: the text is kept out of Windows clipboard history and cloud clipboard (an API key).
+        /// </summary>
+        public static bool Set(string text, bool secret = false)
         {
             for (int i = 0; i < 20; i++)
             {
@@ -33,20 +37,36 @@ namespace QwenStudio.Core
                     try
                     {
                         EmptyClipboard();
-                        var mem = GlobalAlloc(GMEM_MOVEABLE, (UIntPtr)((text.Length + 1) * 2));
-                        if (mem == IntPtr.Zero) return false;
-                        var p = GlobalLock(mem);
-                        Marshal.Copy(text.ToCharArray(), 0, p, text.Length);
-                        Marshal.WriteInt16(p, text.Length * 2, 0);
-                        GlobalUnlock(mem);
-                        if (SetClipboardData(CF_UNICODETEXT, mem) != IntPtr.Zero) return true; // the system owns mem now
-                        GlobalFree(mem);
-                        return false;
+                        var chars = (text + "\0").ToCharArray();
+                        if (!Put(CF_UNICODETEXT, chars, chars.Length * 2)) return false;
+                        if (secret)
+                        {
+                            // documented opt-outs read by clipboard history, cloud clipboard and clipboard monitors
+                            Put(RegisterClipboardFormat("ExcludeClipboardContentFromMonitorProcessing"), null, 4);
+                            Put(RegisterClipboardFormat("CanIncludeInClipboardHistory"), null, 4);
+                            Put(RegisterClipboardFormat("CanUploadToCloudClipboard"), null, 4);
+                        }
+                        return true;
                     }
                     finally { CloseClipboard(); }
                 }
                 Thread.Sleep(10);
             }
+            return false;
+        }
+
+        /// <summary>Puts one format on the open clipboard: the characters, or a zero DWORD when chars is null.</summary>
+        static bool Put(uint format, char[] chars, int bytes)
+        {
+            if (format == 0) return false;
+            var mem = GlobalAlloc(GMEM_MOVEABLE, (UIntPtr)bytes);
+            if (mem == IntPtr.Zero) return false;
+            var p = GlobalLock(mem);
+            if (p == IntPtr.Zero) { GlobalFree(mem); return false; }
+            if (chars != null) Marshal.Copy(chars, 0, p, chars.Length); else Marshal.WriteInt32(p, 0);
+            GlobalUnlock(mem);
+            if (SetClipboardData(format, mem) != IntPtr.Zero) return true;     // the system owns mem now
+            GlobalFree(mem);
             return false;
         }
     }

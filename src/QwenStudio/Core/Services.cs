@@ -49,7 +49,7 @@ namespace QwenStudio.Core
         {
             try
             {
-                var p = Process.Start(new ProcessStartInfo("cmd.exe", "/d /c " + cmdLine) { UseShellExecute = true, Verb = "runas", WindowStyle = ProcessWindowStyle.Hidden });
+                using var p = Process.Start(new ProcessStartInfo("cmd.exe", "/d /c " + cmdLine) { UseShellExecute = true, Verb = "runas", WindowStyle = ProcessWindowStyle.Hidden });
                 await Task.Run(() => p.WaitForExit(60000));
                 return p.ExitCode == 0;
             }
@@ -59,13 +59,6 @@ namespace QwenStudio.Core
         public static void Open(string target)
         {
             try { Process.Start(new ProcessStartInfo(target) { UseShellExecute = true }); } catch { }
-        }
-
-        public static bool IsRunning(string name) => Process.GetProcessesByName(name).Length > 0;
-
-        public static void KillAll(string name)
-        {
-            foreach (var p in Process.GetProcessesByName(name)) { try { p.Kill(true); } catch { } }
         }
     }
 
@@ -114,9 +107,13 @@ namespace QwenStudio.Core
         public bool Running => Mine().Length > 0;
         public string Url => $"http://127.0.0.1:{cfg.WebUiPort}";
 
-        public void Start()
+        /// <summary>
+        /// Starts Open WebUI on 127.0.0.1 only: it runs without a login (WEBUI_AUTH=False), so anyone who could reach it
+        /// would be its admin — free use of the model, the API key in its settings, Python «Functions» on this computer.
+        /// </summary>
+        public async Task Start()
         {
-            SyncKey();
+            await Task.Run(SyncKey);
             var secretFile = Path.Combine(Paths.Base, ".webui_secret_key");
             if (!File.Exists(secretFile))
                 File.WriteAllText(secretFile, Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)));
@@ -126,7 +123,7 @@ namespace QwenStudio.Core
             var psi = new ProcessStartInfo("cmd.exe")
             {
                 UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = Paths.Base,
-                Arguments = $"/d /c \"\"{Exe}\" serve --host 0.0.0.0 --port {cfg.WebUiPort} > \"{LogFile}\" 2>&1\"",
+                Arguments = $"/d /c \"\"{Exe}\" serve --host 127.0.0.1 --port {cfg.WebUiPort} > \"{LogFile}\" 2>&1\"",
             };
             var env = psi.Environment;
             env["PATH"] = Paths.LocalBin + ";" + Environment.GetEnvironmentVariable("PATH");
@@ -139,7 +136,7 @@ namespace QwenStudio.Core
             env["ENABLE_WEB_SEARCH"] = "True";
             env["WEB_SEARCH_ENGINE"] = "duckduckgo";
             env["WEB_SEARCH_RESULT_COUNT"] = "5";
-            Process.Start(psi);
+            Process.Start(psi)?.Dispose();
         }
 
         public Task Stop() => Task.Run(() => { foreach (var p in Mine()) { try { p.Kill(true); } catch { } } });
@@ -153,7 +150,8 @@ namespace QwenStudio.Core
         /// <summary>
         /// Open WebUI saves OPENAI_API_KEYS into webui.db on its first start and ignores the variable afterwards,
         /// so after a key change it kept the old key and showed no models (401). Before each start the current key
-        /// is written into its local connections (LM Studio keeps its own key). Uses Open WebUI's own Python and sqlite3.
+        /// is written into its connection to our server (other local servers keep their own keys). Uses Open WebUI's own
+        /// Python and sqlite3. Blocks up to 20 s: call it off the UI thread.
         /// Returns how many connections were updated, or null if it could not check.
         /// </summary>
         public int? SyncKey()
@@ -171,10 +169,10 @@ k = c.execute(""select value from config where key='openai.api_keys'"").fetchone
 if not u or not k: print(0); raise SystemExit
 urls, keys = json.loads(u[0]), json.loads(k[0])
 keys += [''] * (len(urls) - len(keys))
-key, skip, n = os.environ['QS_KEY'], int(os.environ['QS_SKIP_PORT']), 0
+key, port, n = os.environ['QS_KEY'], int(os.environ['QS_PORT']), 0
 for i, url in enumerate(urls):
     p = urllib.parse.urlparse(url)
-    if p.hostname in ('127.0.0.1', 'localhost') and p.port != skip and keys[i] != key:
+    if p.hostname in ('127.0.0.1', 'localhost') and p.port == port and keys[i] != key:
         keys[i] = key; n += 1
 if n:
     bak = db + '.bak-' + time.strftime('%Y%m%d')
@@ -189,12 +187,12 @@ print(n)
                 psi.ArgumentList.Add("-c");
                 psi.ArgumentList.Add(script);
                 psi.Environment["QS_KEY"] = cfg.ApiKey;      // via the environment: never on a command line
-                psi.Environment["QS_SKIP_PORT"] = cfg.Env.GetInt("LMSTUDIO_PORT", 1234).ToString();
+                psi.Environment["QS_PORT"] = cfg.Port.ToString();
                 using var p = Process.Start(psi);
                 var err = p.StandardError.ReadToEndAsync();
-                var output = p.StandardOutput.ReadToEnd();
+                var output = p.StandardOutput.ReadToEndAsync();
                 if (!p.WaitForExit(20000)) { try { p.Kill(); } catch { } return null; }
-                return p.ExitCode == 0 && int.TryParse(output.Trim(), out var n) ? n : null;
+                return p.ExitCode == 0 && int.TryParse(output.Result.Trim(), out var n) ? n : null;
             }
             catch { return null; }
         }
@@ -251,7 +249,7 @@ print(n)
             foreach (var url in new[] { r.ZipUrl, r.CudartUrl }.Where(u => u != null))
             {
                 var zip = Path.Combine(tmp, Path.GetFileName(new Uri(url).LocalPath));
-                progress.Report("Скачиваю " + Path.GetFileName(zip));
+                progress.Report(L.T("Скачиваю ") + Path.GetFileName(zip));
                 using (var resp = await Http.Slow.GetAsync(url, System.Net.Http.HttpCompletionOption.ResponseHeadersRead))
                 {
                     resp.EnsureSuccessStatusCode();
@@ -264,10 +262,10 @@ print(n)
                     {
                         await dst.WriteAsync(buf.AsMemory(0, n));
                         done += n;
-                        if (done - lastReport > 8 << 20) { lastReport = done; progress.Report($"{Path.GetFileName(zip)}: {done >> 20} / {total >> 20} МБ"); }
+                        if (done - lastReport > 8 << 20) { lastReport = done; progress.Report(L.F("{0}: {1} / {2} МБ", Path.GetFileName(zip), done >> 20, total >> 20)); }
                     }
                 }
-                progress.Report("Распаковываю " + Path.GetFileName(zip));
+                progress.Report(L.T("Распаковываю ") + Path.GetFileName(zip));
                 await Task.Run(() => ZipFile.ExtractToDirectory(zip, target, overwriteFiles: true));
                 try { File.Delete(zip); } catch { }
             }
@@ -301,8 +299,9 @@ print(n)
         public static readonly (string name, Func<Settings, int> port)[] Rules =
         {
             ("Qwen Studio llama-server LAN", s => s.Port),
-            ("Qwen Studio Open WebUI LAN", s => s.WebUiPort),
         };
+        /// <summary>Open WebUI listens on 127.0.0.1 now; its old LAN rule is deleted whenever the rules are recreated.</summary>
+        const string OldWebUiRule = "Qwen Studio Open WebUI LAN";
 
         public static async Task<bool> RuleExists(string name)
         {
@@ -321,6 +320,7 @@ print(n)
             var parts = Rules.Select(r =>
                 $"netsh advfirewall firewall delete rule name=\"{r.name}\" >nul 2>&1 & " +
                 $"netsh advfirewall firewall add rule name=\"{r.name}\" dir=in action=allow protocol=TCP localport={r.port(s)} profile=private remoteip=localsubnet");
+            parts = parts.Prepend($"netsh advfirewall firewall delete rule name=\"{OldWebUiRule}\" >nul 2>&1");
             return Proc.RunElevated("\"" + string.Join(" & ", parts) + "\"");
         }
     }
@@ -361,6 +361,6 @@ print(n)
             return (key, oc);
         }
 
-        public static string Mask(string k) => string.IsNullOrEmpty(k) ? "— не задан —" : k.Length <= 10 ? "••••••" : k[..5] + "••••••••••••" + k[^4..];
+        public static string Mask(string k) => string.IsNullOrEmpty(k) ? L.T("— не задан —") : k.Length <= 10 ? "••••••" : k[..5] + "••••••••••••" + k[^4..];
     }
 }

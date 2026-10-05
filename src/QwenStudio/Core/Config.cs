@@ -44,44 +44,63 @@ namespace QwenStudio.Core
         }
     }
 
-    /// <summary>KEY=VALUE file. Tolerates a BOM and duplicate keys (last one wins, duplicates are dropped on save).</summary>
+    /// <summary>
+    /// KEY=VALUE file. Tolerates a BOM and duplicate keys (last one wins). The file is shared with .bat and eval scripts,
+    /// so a save re-reads it first, changes only the line of that key (comments, blank lines and the other lines stay
+    /// as they are) and swaps the file in whole: a crash mid-write can never leave it empty.
+    /// </summary>
     public sealed class EnvFile
     {
         readonly string path;
-        readonly List<KeyValuePair<string, string>> items = new();
+        readonly Dictionary<string, string> items = new();
+        List<string> lines = new();
+        bool bom, crlf = true;
 
         public EnvFile(string path) { this.path = path; Load(); }
 
         public void Load()
         {
             items.Clear();
+            lines = new();
             if (!File.Exists(path)) return;
-            foreach (var raw in File.ReadAllLines(path))
-            {
-                var l = raw.TrimStart('﻿').Trim();
-                int i = l.IndexOf('=');
-                if (i <= 0 || l.StartsWith("#")) continue;
-                Put(l[..i].Trim(), l[(i + 1)..].Trim().Trim('"'));
-            }
+            var text = File.ReadAllText(path);
+            bom = text.StartsWith('﻿');
+            crlf = text.Contains("\r\n") || !text.Contains('\n');
+            lines = text.TrimStart('﻿').Split('\n').Select(l => l.TrimEnd('\r')).ToList();
+            if (lines.Count > 0 && lines[^1] == "") lines.RemoveAt(lines.Count - 1);
+            foreach (var l in lines)
+                if (KeyOf(l) is string k) items[k] = l[(l.IndexOf('=') + 1)..].Trim().Trim('"');
         }
 
-        public string Get(string key, string def = "")
+        static string KeyOf(string line)
         {
-            var v = items.FirstOrDefault(p => p.Key == key).Value;
-            return string.IsNullOrEmpty(v) ? def : v;
+            var l = line.Trim();
+            int i = l.IndexOf('=');
+            return i <= 0 || l.StartsWith("#") ? null : l[..i].Trim();
         }
+
+        public string Get(string key, string def = "") => items.TryGetValue(key, out var v) && !string.IsNullOrEmpty(v) ? v : def;
 
         public int GetInt(string key, int def) => int.TryParse(Get(key), out var v) ? v : def;
 
-        public void Set(string key, string value) { Put(key, value); Save(); }
-
-        void Put(string key, string value)
+        public void Set(string key, string value)
         {
-            int idx = items.FindIndex(p => p.Key == key);
-            if (idx >= 0) items[idx] = new(key, value); else items.Add(new(key, value));
+            Load();                                      // keep what scripts or a text editor wrote since we last read it
+            int last = lines.FindLastIndex(l => KeyOf(l) == key);
+            if (last >= 0) lines[last] = key + "=" + value; else lines.Add(key + "=" + value);
+            for (int i = last - 1; i >= 0; i--)          // older duplicates would shadow nothing but confuse a reader
+                if (KeyOf(lines[i]) == key) lines.RemoveAt(i);
+            items[key] = value;
+            Save();
         }
 
-        void Save() => File.WriteAllLines(path, items.Select(p => p.Key + "=" + p.Value), new UTF8Encoding(false));
+        void Save()
+        {
+            var tmp = path + ".tmp";
+            var nl = crlf ? "\r\n" : "\n";
+            File.WriteAllText(tmp, string.Join(nl, lines) + nl, new UTF8Encoding(bom));
+            if (File.Exists(path)) File.Replace(tmp, path, null); else File.Move(tmp, path);
+        }
     }
 
     public sealed class Profile
@@ -110,8 +129,18 @@ namespace QwenStudio.Core
         public string Alias { get { int i = Args.IndexOf("--alias"); return i >= 0 && i + 1 < Args.Count ? Args[i + 1].Split(',')[0].Trim() : null; } }
         public int Slots { get { int i = Args.IndexOf("-np"); return i >= 0 && i + 1 < Args.Count && int.TryParse(Args[i + 1], out var n) ? n : 1; } }
 
-        /// <summary>True for the variant that runs on the old model (FALLBACK_* paths).</summary>
-        public bool Old { get; private set; }
+        /// <summary>Which model a launch variant runs on: "main", "old" (FALLBACK_* paths) or "uncensored" (UNCENSORED_MODEL_PATH).</summary>
+        public string Slot { get; private set; } = MainSlot;
+        public const string MainSlot = "main", OldSlot = "old", UncensoredSlot = "uncensored";
+        /// <summary>Slot from a stored string; anything unknown is the main model.</summary>
+        public static string ParseSlot(string s) => s is OldSlot or UncensoredSlot ? s : MainSlot;
+        /// <summary>server_config.env key with the model file of a slot.</summary>
+        public static string ModelKeyOf(string slot) => slot switch { OldSlot => "FALLBACK_MODEL_PATH", UncensoredSlot => "UNCENSORED_MODEL_PATH", _ => "MODEL_PATH" };
+        /// <summary>" · запасная модель" / " · без цензуры" after a mode name; empty for the main model.</summary>
+        public static string SlotSuffix(string slot) => slot switch { OldSlot => L.T(" · запасная модель"), UncensoredSlot => L.T(" · без цензуры"), _ => "" };
+
+        /// <summary>True for the variant that runs on the fallback model (FALLBACK_* paths).</summary>
+        public bool Old => Slot == OldSlot;
         /// <summary>Launch variant: the vision projector is loaded.</summary>
         public bool Sees { get; private set; }
         /// <summary>Launch variant: reasoning is on.</summary>
@@ -120,11 +149,14 @@ namespace QwenStudio.Core
         /// <summary>
         /// What Start launches: this mode on the chosen model with the two toggles applied.
         /// Fallback model (FALLBACK_* paths, usually an older build and weights): no MTP head, at most 96K context and no prompt cache.
+        /// Uncensored model — a fine-tune of the main model (same architecture, MTP head, server and flags), only the weights differ.
         /// Vision off drops --mmproj; vision with MTP turns the prompt cache off (the way «Зрение» was measured).
         /// Thinking off replaces the mode's --reasoning* flags with --reasoning off.
         /// </summary>
-        public Profile Variant(bool old, bool vision, bool think)
+        public Profile Variant(string slot, bool vision, bool think)
         {
+            slot = ParseSlot(slot);
+            bool old = slot == OldSlot;
             bool sees = vision && !string.IsNullOrEmpty(Mmproj);
             var args = new List<string>();
             for (int i = 0; i < Args.Count; i++)
@@ -144,25 +176,26 @@ namespace QwenStudio.Core
             var parts = (Badge ?? "").Split('·').Select(s => s.Trim())
                 .Where(s => s != "" && s != "картинки" && s != "зрение" && !(old && s == "MTP"))
                 .Select(s => s == $"{Ctx / 1024}K" ? $"{ctx / 1024}K" : s).ToList();
-            if (sees) parts.Add("зрение");
-            if (!think) parts.Add("без размышлений");
+            if (sees) parts.Add(L.T("зрение"));
+            if (!think) parts.Add(L.T("без размышлений"));
             return new Profile
             {
                 Id = Id, Name = Name, Description = Description, Badge = string.Join(" · ", parts),
-                Server = old ? "FALLBACK_SERVER_EXE" : Server, Model = old ? "FALLBACK_MODEL_PATH" : Model,
+                Server = old ? "FALLBACK_SERVER_EXE" : Server,
+                Model = slot == MainSlot ? Model : ModelKeyOf(slot),
                 Mmproj = sees ? Mmproj : null, VisionByDefault = VisionByDefault, Ctx = ctx, Args = args,
-                Old = old, Sees = sees, Thinks = think,
+                Slot = slot, Sees = sees, Thinks = think,
             };
         }
 
         /// <summary>For the running line: the badge next to it already lists vision and thinking.</summary>
-        public string ModelTitle => Name + (Old ? " · запасная модель" : "");
-        public string Title => Name + (Sees ? " · зрение" : "") + (Thinks ? "" : " · без размышлений") + (Old ? " · запасная модель" : "");
+        public string ModelTitle => L.T(Name) + SlotSuffix(Slot);
+        public string Title => L.T(Name) + (Sees ? L.T(" · зрение") : "") + (Thinks ? "" : L.T(" · без размышлений")) + SlotSuffix(Slot);
         /// <summary>For the start button: the toggles are right above it.</summary>
-        public string ShortTitle => Name;  // for the start button; the model is on the switch above, the full Title in its tooltip
+        public string ShortTitle => L.T(Name);  // for the start button; the model is on the switch above, the full Title in its tooltip
 
-        /// <summary>"chat|main|vision|nothink": what ran last, for autostart.</summary>
-        public string Key => $"{Id}|{(Old ? "old" : "main")}|{(Sees ? "vision" : "")}|{(Thinks ? "" : "nothink")}";
+        /// <summary>"chat|main|vision|nothink" (or chat|old|…, chat|uncensored|…): what ran last, for autostart.</summary>
+        public string Key => $"{Id}|{Slot}|{(Sees ? "vision" : "")}|{(Thinks ? "" : "nothink")}";
 
         /// <summary>Modes that were separate cards before the toggles: id → (mode, vision, thinking).</summary>
         static readonly Dictionary<string, (string id, bool vision, bool think)> legacy = new()
@@ -179,7 +212,7 @@ namespace QwenStudio.Core
         /// A launch variant by id; toggles not given come from the legacy card the id names, else from the mode's defaults.
         /// Null when the mode is gone from profiles.json.
         /// </summary>
-        public static Profile Resolve(IList<Profile> all, string id, bool old, bool? vision = null, bool? think = null)
+        public static Profile Resolve(IList<Profile> all, string id, string slot, bool? vision = null, bool? think = null)
         {
             var p = all.FirstOrDefault(x => x.Id == id);
             if (p == null && id != null && legacy.TryGetValue(id, out var l))
@@ -187,7 +220,7 @@ namespace QwenStudio.Core
                 p = all.FirstOrDefault(x => x.Id == l.id);
                 vision ??= l.vision; think ??= l.think;
             }
-            return p?.Variant(old, vision ?? p.VisionByDefault, think ?? p.ThinksByDefault);
+            return p?.Variant(slot, vision ?? p.VisionByDefault, think ?? p.ThinksByDefault);
         }
 
         /// <summary>Parses <see cref="Key"/>; also the older "chat|old" form.</summary>
@@ -196,7 +229,7 @@ namespace QwenStudio.Core
             var k = (key ?? "").Split('|');
             if (k[0] == "") return null;
             bool? vision = k.Length > 2 ? k[2] == "vision" : null, think = k.Length > 3 ? k[3] != "nothink" : null;
-            return Resolve(all, k[0], k.Length > 1 && k[1] == "old", vision, think);
+            return Resolve(all, k[0], k.Length > 1 ? k[1] : null, vision, think);
         }
 
         public static List<Profile> LoadAll()
@@ -214,7 +247,10 @@ namespace QwenStudio.Core
         public readonly EnvFile Env = new(Paths.ServerConfig);
 
         public string ApiKey => Env.Get("LLAMA_API_KEY");
-        public string Host => Env.Get("HOST", "0.0.0.0");
+        /// <summary>Listen address; without HOST only this computer (the LAN switch in Settings writes 0.0.0.0).</summary>
+        public string Host => Env.Get("HOST", "127.0.0.1");
+        /// <summary>The server is reachable from other computers.</summary>
+        public bool OnLan => !(Host is "127.0.0.1" or "localhost" or "::1");
         public int Port => Env.GetInt("PORT", 8080);
         public int WebUiPort => Env.GetInt("WEBUI_PORT", 3000);
         string lanIp;

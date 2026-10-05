@@ -1,8 +1,10 @@
 using System;
+using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 using QwenStudio.Core;
 
@@ -14,6 +16,13 @@ namespace QwenStudio
         static string Id => "QwenStudio.SingleInstance." + Convert.ToHexString(SHA1.HashData(Encoding.UTF8.GetBytes(Paths.Base.ToLowerInvariant())))[..12];
         Mutex mutex;
         EventWaitHandle wake;
+
+        /// <summary>Appends an unhandled exception to logs\studio\crash.log (any thread, never throws).</summary>
+        static void Record(Exception ex)
+        {
+            try { File.AppendAllText(Path.Combine(Paths.Logs, "crash.log"), $"{DateTime.Now:yyyy-MM-dd HH:mm:ss}  {ex}{Environment.NewLine}{Environment.NewLine}"); }
+            catch { }
+        }
 
         protected override void OnStartup(StartupEventArgs e)
         {
@@ -38,8 +47,11 @@ namespace QwenStudio
                     });
             }) { IsBackground = true }.Start();
 
+            AppDomain.CurrentDomain.UnhandledException += (_, a) => Record(a.ExceptionObject as Exception);
+            TaskScheduler.UnobservedTaskException += (_, a) => { Record(a.Exception); a.SetObserved(); };
             DispatcherUnhandledException += (_, a) =>
             {
+                Record(a.Exception);
                 MessageBox.Show(a.Exception.Message, "Qwen Studio", MessageBoxButton.OK, MessageBoxImage.Error);
                 a.Handled = true;
             };
