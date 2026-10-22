@@ -1,0 +1,48 @@
+# Dependabot: one quiet pass a month, security fixes as soon as they appear.
+# Monthly version updates arrive as at most two pull requests per ecosystem:
+# minor and patch together, major versions together. A release must be
+# 7 days old before it is offered. Security fixes ignore the schedule.
+version: 2
+updates:
+  - package-ecosystem: "nuget"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "deps"
+    groups:
+      security:
+        applies-to: security-updates
+        patterns: ["*"]
+      minor-and-patch:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+      major:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: ["major"]
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "deps"
+    groups:
+      security:
+        applies-to: security-updates
+        patterns: ["*"]
+      minor-and-patch:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+      major:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: ["major"]
