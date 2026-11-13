@@ -95,7 +95,7 @@
                                 </StackPanel>
                             </DockPanel>
                             <Border Style="{StaticResource Divider}" Margin="{StaticResource DividerGap}"/>
-                            <DockPanel ToolTip="ComfyUI (:8188): генерация картинок. Папка ComfyUI задаётся в «Настройки → Сервер и модели». Моделям картинок нужна большая часть видеопамяти — вместе с языковой моделью они могут не поместиться.">
+                            <DockPanel ToolTip="ComfyUI (:8188): генерация картинок. Папка ComfyUI задаётся в «Настройки → Сервер и пути». Моделям картинок нужна большая часть видеопамяти — вместе с языковой моделью они могут не поместиться.">
                                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
                                     <Button x:Name="BtnImgStop" Style="{StaticResource IconBtn}" Content="&#xE71A;" ToolTip="Остановить ComfyUI" Click="ImgStop_Click" Visibility="Collapsed"/>
                                     <Button x:Name="BtnImg" Content="Запустить" Margin="{StaticResource GapLeftS}" Click="Img_Click"/>
@@ -115,13 +115,32 @@
 
                 <StackPanel DockPanel.Dock="Top">
                     <TextBlock Text="МОДЕЛЬ" Style="{StaticResource Caption}"/>
-                    <Border Style="{StaticResource Segments}" Margin="{StaticResource GapBelow}" HorizontalAlignment="Left">
-                        <StackPanel Orientation="Horizontal">
-                            <RadioButton x:Name="ModelMain" Style="{StaticResource Tab}" GroupName="model" Content="Основная" HorizontalContentAlignment="Center" Checked="Model_Checked"/>
-                            <RadioButton x:Name="ModelOld" Style="{StaticResource Tab}" GroupName="model" Content="Запасная" HorizontalContentAlignment="Center" Checked="Model_Checked"/>
-                            <RadioButton x:Name="ModelUncensored" Style="{StaticResource Tab}" GroupName="model" Content="Без цензуры" HorizontalContentAlignment="Center" Checked="Model_Checked" ToolTipService.ShowOnDisabled="True"/>
-                        </StackPanel>
-                    </Border>
+                    <!-- one card with the picked model; the list opens under it. Picking does not restart: Primary below applies -->
+                    <Grid Margin="{StaticResource GapBelow}">
+                        <ToggleButton x:Name="ModelPicker" Style="{StaticResource ProfileCard}" Margin="0" AutomationProperties.Name="Выбрать модель">
+                            <DockPanel>
+                                <TextBlock DockPanel.Dock="Right" Style="{StaticResource Icon}" FontSize="{StaticResource IconS}" Text="&#xE70D;"
+                                           Foreground="{DynamicResource Muted}" VerticalAlignment="Center" Margin="{StaticResource GapLeftS}"/>
+                                <Ellipse x:Name="ModelDot" DockPanel.Dock="Left" Style="{StaticResource Dot}" Fill="{DynamicResource Good}"
+                                         Margin="{StaticResource GapRightS}" Visibility="Collapsed"/>
+                                <StackPanel>
+                                    <TextBlock x:Name="ModelName" Style="{StaticResource BodyStrong}" TextTrimming="CharacterEllipsis"/>
+                                    <TextBlock x:Name="ModelSub" Style="{StaticResource Label}" TextTrimming="CharacterEllipsis"/>
+                                </StackPanel>
+                            </DockPanel>
+                        </ToggleButton>
+                        <Popup IsOpen="{Binding IsChecked, ElementName=ModelPicker, Mode=TwoWay}" PlacementTarget="{Binding ElementName=ModelPicker}"
+                               Placement="Bottom" StaysOpen="False" AllowsTransparency="True" Width="{Binding ActualWidth, ElementName=ModelPicker}"
+                               Opened="ModelPicker_Opened" Closed="ModelPicker_Closed">
+                            <Border Style="{StaticResource Card}" Padding="{StaticResource SegmentPad}" Margin="{StaticResource PopupGap}" Effect="{StaticResource PopupShadow}">
+                                <StackPanel>
+                                    <StackPanel x:Name="ModelList"/>
+                                    <Border Style="{StaticResource Divider}" Margin="{StaticResource SegmentPad}"/>
+                                    <Button Style="{StaticResource Link}" HorizontalAlignment="Left" Margin="{StaticResource RowPad}" Content="Добавить или настроить модели…" Click="ModelsSettings_Click"/>
+                                </StackPanel>
+                            </Border>
+                        </Popup>
+                    </Grid>
                     <TextBlock Text="РЕЖИМ" Style="{StaticResource Caption}"/>
                 </StackPanel>
 
@@ -556,9 +575,28 @@
                         </StackPanel>
                     </Border>
 
+                    <Border x:Name="ModelsCard" Style="{StaticResource Card}" Margin="{StaticResource GapBelow}">
+                        <StackPanel>
+                            <TextBlock Text="Модели" Style="{StaticResource Title}" Margin="{StaticResource GapBelowS}"/>
+                            <TextBlock Style="{StaticResource Hint}" Text="Список «Модель» на главном экране, в этом порядке. У модели — файл GGUF и, если нужно, свой llama-server, модуль зрения и режимы; без своих режимов она запускается в общих (profiles.json). Хранится в models.json; работающий сервер подхватит изменения при следующем запуске."/>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="{StaticResource ListColumn}"/>
+                                    <ColumnDefinition Width="{StaticResource ColGap}"/>
+                                    <ColumnDefinition/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <StackPanel x:Name="ModelsList"/>
+                                    <Button Content="+ Добавить модель" Height="{StaticResource HControl}" Click="ModelAdd_Click"/>
+                                </StackPanel>
+                                <StackPanel x:Name="ModelEditor" Grid.Column="2"/>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
                     <Border Style="{StaticResource Card}" Margin="{StaticResource GapBelow}">
                         <StackPanel>
-                            <TextBlock Text="Сервер и модели" Style="{StaticResource Title}" Margin="{StaticResource GapBelowS}"/>
+                            <TextBlock Text="Сервер и пути" Style="{StaticResource Title}" Margin="{StaticResource GapBelowS}"/>
                             <TextBlock Style="{StaticResource Hint}" Text="Пути относительно папки проекта или абсолютные. Сохраняются в server_config.env и применяются при следующем запуске."/>
                             <StackPanel x:Name="PathsPanel"/>
                         </StackPanel>
@@ -613,7 +651,7 @@
                     <Border Style="{StaticResource Card}" Margin="{StaticResource GapBelow}">
                         <StackPanel>
                             <TextBlock Text="Обновления" Style="{StaticResource Title}" Margin="{StaticResource GapBelowS}"/>
-                            <TextBlock Style="{StaticResource Hint}" Text="Новая сборка llama.cpp ставится в отдельную папку llama-bNNNN — текущая остаётся нетронутой, вернуться можно в «Сервер и модели»."/>
+                            <TextBlock Style="{StaticResource Hint}" Text="Новая сборка llama.cpp ставится в отдельную папку llama-bNNNN — текущая остаётся нетронутой, вернуться можно в «Сервер и пути»."/>
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="{StaticResource FieldColumn}"/>

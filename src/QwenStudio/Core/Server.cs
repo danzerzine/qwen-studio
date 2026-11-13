@@ -114,7 +114,7 @@ namespace QwenStudio.Core
             public DateTime Started { get; set; }
             public int Port { get; set; }
             public bool Old { get; set; }
-            /// <summary>Model slot ("main", "old", "uncensored"); absent in files written before the third model.</summary>
+            /// <summary>Model id in models.json; absent in files written before the third model (then Old says which).</summary>
             public string Model { get; set; }
             /// <summary>Toggles of the running variant; absent in files written before them.</summary>
             public bool? Vision { get; set; }
@@ -125,7 +125,7 @@ namespace QwenStudio.Core
             Line?.Invoke(new LogLine { Time = DateTime.Now.ToString("HH:mm:ss"), Text = text, Kind = kind, Important = true });
 
         /// <summary>Pick up a server that is already running (started by an earlier session or by hand).</summary>
-        public void Attach(IList<Profile> profiles, int port)
+        public void Attach(IList<ModelDef> models, IList<Profile> shared, int port)
         {
             try
             {
@@ -135,7 +135,7 @@ namespace QwenStudio.Core
                 else
                 {
                     Watch(mine);
-                    Profile = Profile.Resolve(profiles, st.Profile, st.Model ?? (st.Old ? Profile.OldSlot : Profile.MainSlot), st.Vision, st.Think);
+                    Profile = Profile.Resolve(models, shared, st.Profile, st.Model ?? (st.Old ? ModelDef.OldId : ModelDef.Main), st.Vision, st.Think);
                     LogFile = st.Log; Since = st.Started; Port = st.Port;
                     State = ServerState.Starting;          // the health poll promotes it to Running
                     Attached = true;

@@ -35,7 +35,10 @@ namespace QwenStudio
         readonly WebUi webui;
         readonly Images images;
         bool imagesBusy;
+        /// <summary>Modes of the selected model: its own, or the shared ones of profiles.json.</summary>
         List<Profile> profiles = new();
+        List<Profile> shared = new();
+        List<ModelDef> models = new();
         Profile selected;
 
         readonly BulkCollection<LogLine> log = new();
@@ -109,11 +112,13 @@ namespace QwenStudio
             SourceInitialized += (_, _) => DarkTitleBar();
             Loaded += async (_, _) =>
             {
-                model = Profile.ParseSlot(ui.Get("MODEL"));
-                // the toggles ask the models whether they can reason: read both headers once, off the UI thread
-                await Task.Run(() => { foreach (var k in new[] { "MODEL_PATH", "FALLBACK_MODEL_PATH", "UNCENSORED_MODEL_PATH" }) Gguf.Thinks(Paths.Resolve(cfg.Env.Get(k))); });
+                model = ui.Get("MODEL");
+                ReadModels();
+                // the toggles ask the models whether they can reason: read the headers once, off the UI thread
+                var files = models.Select(m => cfg.PathOf(m.Model)).ToList();
+                await Task.Run(() => { foreach (var f in files) Gguf.Thinks(f); });
                 LoadProfiles();
-                srv.Attach(profiles, cfg.Port);
+                srv.Attach(models, shared, cfg.Port);
                 if (srv.Profile != null && srv.Profile.Slot != model) { model = srv.Profile.Slot; LoadProfiles(); }
                 ShowModels();
                 (ui.Get("CHART") == "live" ? ChartLive : ChartDay).IsChecked = true;
@@ -138,10 +143,9 @@ namespace QwenStudio
 
         async Task LoadLedger()
         {
-            var fallback = IOPath.GetFileName(cfg.Env.Get("FALLBACK_MODEL_PATH"));
-            var uncensored = IOPath.GetFileName(cfg.Env.Get("UNCENSORED_MODEL_PATH"));
+            var files = models.Select(m => (m.Id, IOPath.GetFileName(cfg.PathOf(m.Model)))).ToList();
             var live = srv.Attached ? srv.LogFile : null;
-            try { await Task.Run(() => ledger.Load(fallback, uncensored, live)); }
+            try { await Task.Run(() => ledger.Load(files, live)); }
             catch (Exception e) { srv.Emit(L.T("Учёт работы не прочитан: ") + e.Message, LogKind.Warn); }
             ledgerReady = true;
             foreach (var (at, gen) in pendingReq) ledger.Request(at, gen);
@@ -196,10 +200,25 @@ namespace QwenStudio
 
         // ───────────────────────── profiles ─────────────────────────
 
+        /// <summary>Reads profiles.json and models.json (made from server_config.env on the first run) and picks the selected model's modes.</summary>
+        void ReadModels()
+        {
+            try { shared = Profile.LoadAll(); }
+            catch (Exception e) { srv.Emit(L.T("profiles.json не читается: ") + e.Message, LogKind.Error); shared = new(); }
+            try { models = ModelDef.LoadAll(cfg.Env, shared); }
+            catch (Exception e) { srv.Emit(L.T("models.json не читается: ") + e.Message, LogKind.Error); models = new(); }
+            // nothing readable: the model of server_config.env, not saved, so a broken models.json stays for repair
+            if (models.Count == 0) models.Add(new ModelDef { Id = ModelDef.Main, Name = ModelDef.NameOf(cfg.Env.Get("MODEL_PATH")), Model = "MODEL_PATH" });
+            model = Current.Id;
+            profiles = Current.Profiles ?? shared;
+        }
+
+        /// <summary>The model picked in the sidebar; the first one when the remembered id is gone.</summary>
+        ModelDef Current => models.FirstOrDefault(m => m.Id == model) ?? models.FirstOrDefault();
+
         void LoadProfiles()
         {
-            try { profiles = Profile.LoadAll(); }
-            catch (Exception e) { srv.Emit(L.T("profiles.json не читается: ") + e.Message, LogKind.Error); profiles = new(); }
+            ReadModels();
 
             ProfilesPanel.Children.Clear();
             profileDots.Clear();
@@ -226,7 +245,7 @@ namespace QwenStudio
             var last = ui.Get("PROFILE");
             var same = profiles.FirstOrDefault(p => p.Id == last);
             if (same != null) Select(same);
-            else if (Profile.Resolve(profiles, last, model) is Profile former) SelectVariant(former);   // «Без размышлений» → «Чат» with thinking off
+            else if (Profile.Resolve(models, shared, last, model) is Profile former) SelectVariant(former);   // «Без размышлений» → «Чат» with thinking off
             else Select(profiles.FirstOrDefault());
             ShowOptions();
             ProfilesText.Text = L.F("profiles.json · {0} шт.", profiles.Count);
@@ -254,8 +273,8 @@ namespace QwenStudio
             ShowOptions();
         }
 
-        /// <summary>The model switch: Profile.MainSlot, OldSlot or UncensoredSlot.</summary>
-        string model = Profile.MainSlot;
+        /// <summary>Id of the model picked in the sidebar (models.json).</summary>
+        string model;
         bool showingOptions;
         readonly Dictionary<Profile, TextBlock> profileBadges = new();
 
@@ -264,7 +283,7 @@ namespace QwenStudio
 
         /// <summary>A mode on the selected model with its remembered toggles; what the mode or the model cannot do is off.</summary>
         Profile VariantOf(Profile p) =>
-            p.Variant(model, SeeBlock(p) == null && Wants(p, "VISION", p.VisionByDefault), ThinkBlock() == null && Wants(p, "THINK", p.ThinksByDefault));
+            p.Variant(Current, SeeBlock(p) == null && Wants(p, "VISION", p.VisionByDefault), ThinkBlock() == null && Wants(p, "THINK", p.ThinksByDefault));
 
         bool Wants(Profile p, string option, bool byDefault) => ui.Get(option + "_" + p.Id) switch { "1" => true, "0" => false, _ => byDefault };
 
@@ -273,14 +292,14 @@ namespace QwenStudio
         {
             if (string.IsNullOrEmpty(p.Mmproj))
                 return L.F("В режиме «{0}» зрение не предусмотрено: модулю зрения (~1 ГБ) не хватит видеопамяти рядом с его контекстом.", L.T(p.Name));
-            var file = cfg.MmprojFile(p);
-            return File.Exists(file) ? null : L.F("Не найден модуль зрения:\n{0}\n\nУкажите путь в «Настройки → Сервер и модели».", file);
+            var file = cfg.PathOf(string.IsNullOrWhiteSpace(Current?.Mmproj) ? p.Mmproj : Current.Mmproj);
+            return File.Exists(file) ? null : L.F("Не найден модуль зрения:\n{0}\n\nУкажите путь в «Настройки → Модели».", file);
         }
 
         /// <summary>Why the selected model cannot reason, or null when it can (or it is not known: the model file is missing).</summary>
         string ThinkBlock()
         {
-            var file = Paths.Resolve(cfg.Env.Get(Profile.ModelKeyOf(model)));
+            var file = cfg.PathOf(Current?.Model);
             return Gguf.Thinks(file) == false
                 ? L.F("Модель {0} не умеет размышлять: в её шаблоне чата нет режима размышлений.", IOPath.GetFileName(file))
                 : null;
@@ -312,40 +331,67 @@ namespace QwenStudio
             UpdateUi();
         }
 
-        void Model_Checked(object sender, RoutedEventArgs e)
+        /// <summary>A model picked in the list: its modes come up, the server is not touched until Primary.</summary>
+        void PickModel(ModelDef m)
         {
-            var slot = sender == ModelOld ? Profile.OldSlot : sender == ModelUncensored ? Profile.UncensoredSlot : Profile.MainSlot;
-            if (slot == model || !IsLoaded || showingModels) return;
-            model = slot;
-            try { ui.Set("MODEL", slot); } catch { }
-            LoadProfiles();                    // badges change: no MTP, 96K cap
+            ModelPicker.IsChecked = false;
+            if (m.Id == model) return;
+            model = m.Id;
+            try { ui.Set("MODEL", m.Id); } catch { }
+            LoadProfiles();                    // its own modes, or the shared ones
+            ShowModels();
             UpdateUi();
         }
 
-        bool showingModels;
-
-        /// <summary>
-        /// Model switch: checks the current slot, file names in the tooltips. The uncensored tab is off until its file is set
-        /// in Settings (the reason is in its tooltip); a server running on it keeps the tab on regardless.
-        /// </summary>
+        /// <summary>The model card (name, file size, file) and the list in its popup, with what runs marked.</summary>
         void ShowModels()
         {
-            showingModels = true;
-            ModelMain.ToolTip = IOPath.GetFileName(cfg.Env.Get("MODEL_PATH"));
-            ModelOld.ToolTip = IOPath.GetFileName(cfg.Env.Get("FALLBACK_MODEL_PATH")) + L.T(" — запасная модель, без MTP, контекст до 96K");
-            // the fallback switch only makes sense when a second model is configured
-            ModelOld.IsEnabled = model == Profile.OldSlot || cfg.Env.Get("FALLBACK_MODEL_PATH") != "";
-            var path = cfg.Env.Get("UNCENSORED_MODEL_PATH");
-            bool has = path != "" && File.Exists(Paths.Resolve(path));
-            bool runs = srv.Profile?.Slot == Profile.UncensoredSlot && ServerUp;
-            ModelUncensored.IsEnabled = has || runs;
-            ModelUncensored.ToolTip = has
-                ? IOPath.GetFileName(path) + L.T(" — основная модель, дообученная без отказов: тот же сервер, MTP и режимы")
-                : path == "" ? L.T("Модель без цензуры не выбрана: укажите файл в «Настройки → Сервер и модели».")
-                : L.F("Не найден файл модели без цензуры:\n{0}\n\nУкажите путь в «Настройки → Сервер и модели».", Paths.Resolve(path));
-            if (!ModelUncensored.IsEnabled && model == Profile.UncensoredSlot) { model = Profile.MainSlot; LoadProfiles(); }
-            (model == Profile.OldSlot ? ModelOld : model == Profile.UncensoredSlot ? ModelUncensored : ModelMain).IsChecked = true;
-            showingModels = false;
+            var cur = Current;
+            ModelName.Text = cur?.Name ?? "";
+            ModelSub.Text = cur == null ? "" : ModelSubOf(cur);
+            ModelPicker.ToolTip = cur == null ? null : cfg.PathOf(cur.Model);
+            ModelList.Children.Clear();
+            var running = ServerUp ? srv.Profile?.Slot : null;
+            foreach (var m in models)
+            {
+                var row = new DockPanel();
+                var tag = m.Id == running ? L.T("работает") : string.IsNullOrWhiteSpace(m.Label) ? null : L.T(m.Label);
+                if (tag != null)
+                {
+                    var chip = new Border { Style = R<Style>("Chip"), VerticalAlignment = VerticalAlignment.Center, Margin = R<Thickness>("GapLeftS"),
+                                            Child = new TextBlock { Text = tag, Style = R<Style>("Label") } };
+                    DockPanel.SetDock(chip, Dock.Right);
+                    row.Children.Add(chip);
+                }
+                var text = new StackPanel();
+                text.Children.Add(new TextBlock { Text = m.Name, Style = R<Style>("BodyStrong"), TextTrimming = TextTrimming.CharacterEllipsis });
+                text.Children.Add(new TextBlock { Text = ModelSubOf(m), Style = R<Style>("Label"), TextTrimming = TextTrimming.CharacterEllipsis });
+                row.Children.Add(text);
+                var rb = new RadioButton { Style = R<Style>("MenuRow"), GroupName = "model", Content = row, IsChecked = m.Id == cur?.Id, ToolTip = cfg.PathOf(m.Model) };
+                rb.Click += (_, _) => PickModel(m);
+                ModelList.Children.Add(rb);
+            }
+        }
+
+        /// <summary>"12,1 ГБ · model-IQ3_S.gguf" (no file when the name is the file's), or why the file is not there.</summary>
+        string ModelSubOf(ModelDef m)
+        {
+            var f = cfg.PathOf(m.Model);
+            if (!File.Exists(f)) return string.IsNullOrWhiteSpace(m.Model) ? L.T("файл не выбран") : L.T("файл не найден") + " · " + IOPath.GetFileName(f);
+            var size = L.F("{0:0.0} ГБ", new FileInfo(f).Length / 1e9);
+            // a name taken from the file says it already
+            return m.Name == ModelDef.NameOf(f) ? size : size + " · " + IOPath.GetFileName(f);
+        }
+
+        void ModelPicker_Opened(object sender, EventArgs e) { ShowModels(); ModelPicker.IsHitTestVisible = false; }
+        void ModelPicker_Closed(object sender, EventArgs e) { ModelPicker.IsChecked = false; ModelPicker.IsHitTestVisible = true; }
+
+        void ModelsSettings_Click(object sender, RoutedEventArgs e)
+        {
+            ModelPicker.IsChecked = false;
+            TabSettings.IsChecked = true;
+            ShowModelEditor(Current);
+            Dispatcher.BeginInvoke(() => ModelsCard.BringIntoView(), DispatcherPriority.Loaded);
         }
 
         void SaveUiState() { try { if (selected != null && ui.Get("PROFILE") != selected.Id) ui.Set("PROFILE", selected.Id); } catch { } }
@@ -446,10 +492,10 @@ namespace QwenStudio
             {
                 cfg.Env.Load();
                 string exe = cfg.ServerExe(p), model = cfg.ModelFile(p);
-                if (!File.Exists(exe)) { Fail(L.F("Не найден llama-server:\n{0}\n\nУкажите путь в «Настройки → Сервер и модели».", exe)); return; }
-                if (!File.Exists(model)) { Fail(L.F("Не найдена модель:\n{0}\n\nУкажите путь в «Настройки → Сервер и модели».", model)); return; }
+                if (!File.Exists(exe)) { Fail(L.F("Не найден llama-server:\n{0}\n\nУкажите путь в «Настройки → Модели» или «Настройки → Сервер и пути».", exe)); return; }
+                if (!File.Exists(model)) { Fail(L.F("Не найдена модель:\n{0}\n\nУкажите путь в «Настройки → Модели».", model)); return; }
                 string mmproj = cfg.MmprojFile(p);
-                if (mmproj != null && !File.Exists(mmproj)) { Fail(L.F("Не найден модуль зрения:\n{0}\n\nУкажите путь в «Настройки → Сервер и модели».", mmproj)); return; }
+                if (mmproj != null && !File.Exists(mmproj)) { Fail(L.F("Не найден модуль зрения:\n{0}\n\nУкажите путь в «Настройки → Модели» или «Настройки → Сервер и пути».", mmproj)); return; }
                 if (cfg.OnLan && string.IsNullOrEmpty(cfg.ApiKey))
                 { Fail(L.T("Сервер открыт для локальной сети, но API-ключ не задан — моделью мог бы пользоваться любой в сети.\n\nСоздайте ключ: «Настройки → Новый ключ…».")); return; }
 
@@ -543,7 +589,7 @@ namespace QwenStudio
         async Task AutoStartServer()
         {
             if (ui.Get("AUTOSTART_SERVER") != "1") return;
-            var p = Profile.FromKey(profiles, ui.Get("LAST_START"));
+            var p = Profile.FromKey(models, shared, ui.Get("LAST_START"));
             if (p == null) { srv.Emit(L.T("Автозапуск: сервер ещё ни разу не запускался из Qwen Studio — нечего поднимать."), LogKind.Warn); return; }
             if (ServerUp) { srv.Emit(L.T("Автозапуск: сервер уже работает.")); return; }
             srv.Emit(L.F("Автозапуск: через 20 с подниму «{0}», если видеокарта свободна.", p.Title));
@@ -623,7 +669,7 @@ namespace QwenStudio
                 else
                 {
                     if (activity.Ok) activity.Reset();
-                    if (tick % 3 == 0 && !busy && Net.PortOwner(cfg.Port) != 0) srv.Attach(profiles, cfg.Port);
+                    if (tick % 3 == 0 && !busy && Net.PortOwner(cfg.Port) != 0) srv.Attach(models, shared, cfg.Port);
                 }
 
                 if (tick % 3 == 1 && images.Installed && !imagesBusy) await images.Probe();
@@ -763,7 +809,7 @@ namespace QwenStudio
             else if (running != null && chosen != null && running.Id == chosen.Id && running.Slot == chosen.Slot && st != ServerState.External)
             { BtnPrimaryIcon.Text = ""; BtnPrimaryText.Text = L.T("Применить изменения"); }     // same mode, only the toggles differ
             else { BtnPrimaryIcon.Text = ""; BtnPrimaryText.Text = running != null && chosen != null && running.Id == chosen.Id
-                ? chosen.Slot switch { Profile.OldSlot => L.T("Переключить на запасную модель"), Profile.UncensoredSlot => L.T("Переключить на модель без цензуры"), _ => L.T("Переключить на основную модель") }   // same mode, the model switch moved
+                ? L.F("Переключить на {0}", chosen.ModelName)   // same mode, another model picked
                 : L.F("Переключить на «{0}»", chosen?.ShortTitle); }
             BtnPrimary.ToolTip = chosen == null ? null : $"{chosen.Title}\n{chosen.Badge}";
             SecondaryActions.Visibility = ServerUp ? Visibility.Visible : Visibility.Collapsed;
@@ -781,7 +827,8 @@ namespace QwenStudio
             ActionHint.Text = hint ?? "";
             ActionHint.Visibility = hint != null ? Visibility.Visible : Visibility.Collapsed;
             foreach (var kv in profileDots)
-                kv.Value.Visibility = running != null && kv.Key.Id == running.Id && running.Slot == model && st != ServerState.Crashed ? Visibility.Visible : Visibility.Collapsed;
+                kv.Value.Visibility = running != null && kv.Key.Id == running.Id && running.Slot == Current?.Id && st != ServerState.Crashed ? Visibility.Visible : Visibility.Collapsed;
+            ModelDot.Visibility = running != null && running.Slot == Current?.Id && st != ServerState.Crashed ? Visibility.Visible : Visibility.Collapsed;
 
             // gpu
             var gs = lastGpu;
@@ -1066,28 +1113,29 @@ namespace QwenStudio
 
         // ───────────────────────── statistics tab ─────────────────────────
 
-        /// <summary>"agent|old" → "Агент · запасная модель", "chat|uncensored" → "Чат · без цензуры"; minutes of a server started elsewhere have no mode.</summary>
+        /// <summary>"agent|old" → "Агент · Qwen3.8-27B": mode name and, off the first model, the model's name; minutes of a server started elsewhere have no mode.</summary>
         string ModeTitle(string mode)
         {
             var parts = mode.Split('|');
             if (parts[0] == "?") return L.T("другой сервер");
-            var name = L.T(profiles.FirstOrDefault(p => p.Id == parts[0])?.Name ?? parts[0]);
-            return name + Profile.SlotSuffix(parts.Length > 1 ? parts[1] : null);
+            var name = L.T(shared.FirstOrDefault(p => p.Id == parts[0])?.Name ?? models.SelectMany(m => m.Profiles ?? new()).FirstOrDefault(p => p.Id == parts[0])?.Name ?? parts[0]);
+            if (parts.Length < 2) return name;
+            return name + " · " + (models.FirstOrDefault(m => m.Id == parts[1])?.Name ?? parts[1]);
         }
 
-        /// <summary>One series colour per profile (Series1–4, unknown → Series5); the fallback and uncensored models keep the hue at SeriesAltOpacity.</summary>
+        /// <summary>One series colour per mode (Series1–4, unknown → Series5); modes off the first model keep the hue at SeriesAltOpacity.</summary>
         void PaintMode(FrameworkElement el, DependencyProperty prop, string mode)
         {
             var parts = mode.Split('|');
-            int i = profiles.FindIndex(p => p.Id == parts[0]);
+            int i = shared.FindIndex(p => p.Id == parts[0]);
             el.SetResourceReference(prop, i < 0 ? "Series5" : "Series" + (i % 4 + 1));
             if (parts.Length > 1) el.Opacity = R<double>("SeriesAltOpacity");
         }
 
-        /// <summary>Main model's modes in profile order, then the uncensored model's, the fallback model's, then unknown.</summary>
+        /// <summary>Modes in model order (models.json), each model's modes in profile order, then unknown.</summary>
         List<string> OrderedModes() => ledger.Modes()
-            .OrderBy(m => m.Contains("|old") ? 2 : m.Contains("|uncensored") ? 1 : 0)
-            .ThenBy(m => { int i = profiles.FindIndex(p => p.Id == m.Split('|')[0]); return i < 0 ? 99 : i; }).ToList();
+            .OrderBy(m => { var k = m.Split('|'); int i = k.Length < 2 ? 0 : models.FindIndex(x => x.Id == k[1]); return i < 0 ? 99 : i; })
+            .ThenBy(m => { int i = shared.FindIndex(p => p.Id == m.Split('|')[0]); return i < 0 ? 99 : i; }).ToList();
 
         static string Hours(int minutes) => minutes >= 60 ? L.F("{0:0.#} ч", minutes / 60.0) : L.F("{0} мин", minutes);
 
@@ -1462,16 +1510,13 @@ namespace QwenStudio
         static readonly (string key, string title, string filter)[] PathKeys =
         {
             ("SERVER_EXE", "Сервер llama.cpp", "llama-server.exe|llama-server.exe"),
-            ("MODEL_PATH", "Модель", "GGUF|*.gguf"),
-            ("FALLBACK_SERVER_EXE", "Запасной сервер", "llama-server.exe|llama-server.exe"),
-            ("FALLBACK_MODEL_PATH", "Запасная модель", "GGUF|*.gguf"),
-            ("UNCENSORED_MODEL_PATH", "Модель без цензуры", "GGUF|*.gguf"),
             ("MMPROJ_PATH", "Модуль зрения (mmproj)", "GGUF|*.gguf"),
             ("COMFYUI_DIR", "ComfyUI (картинки)", "ComfyUI main.py или run_nvidia_gpu.bat|main.py;run_nvidia_gpu.bat"),
         };
 
         void FillSettings()
         {
+            FillModels();
             PathsPanel.Children.Clear();
             foreach (var (key, title, filter) in PathKeys)
             {
@@ -1494,20 +1539,12 @@ namespace QwenStudio
                 void Commit()
                 {
                     var v = box.Text.Trim();
-                    if (v != cfg.Env.Get(key)) { cfg.Env.Set(key, v); srv.Emit($"{key} = {v}"); if (key.EndsWith("MODEL_PATH")) { ShowModels(); ShowOptions(); UpdateUi(); } }
+                    if (v != cfg.Env.Get(key)) { cfg.Env.Set(key, v); srv.Emit($"{key} = {v}"); ShowModels(); ShowOptions(); UpdateUi(); }
                     Mark();
                 }
                 box.LostFocus += (_, _) => Commit();
                 box.KeyDown += (_, a) => { if (a.Key == Key.Enter) Commit(); };
-                browse.Click += (_, _) =>
-                {
-                    var cur = Paths.Resolve(box.Text);
-                    var dlg = new OpenFileDialog { Filter = filter + L.T("|Все файлы|*.*"), InitialDirectory = Directory.Exists(IOPath.GetDirectoryName(cur)) ? IOPath.GetDirectoryName(cur) : Paths.Base };
-                    if (dlg.ShowDialog(this) != true) return;
-                    var rel = IOPath.GetRelativePath(Paths.Base, dlg.FileName);
-                    box.Text = rel.StartsWith("..") ? dlg.FileName : rel;
-                    Commit();
-                };
+                browse.Click += (_, _) => { if (Browse(box.Text, filter) is string f) { box.Text = f; Commit(); } };
                 Mark();
                 Grid.SetColumn(box, 1); Grid.SetColumn(ok, 2); Grid.SetColumn(browse, 3);
                 row.Children.Add(label); row.Children.Add(box); row.Children.Add(ok); row.Children.Add(browse);
@@ -1541,7 +1578,7 @@ namespace QwenStudio
             AutostartToggle.Checked += Autostart_Changed; AutostartToggle.Unchecked += Autostart_Changed;
             AutoServerToggle.Checked += AutoServer_Changed; AutoServerToggle.Unchecked += AutoServer_Changed;
 
-            var last = Profile.FromKey(profiles, ui.Get("LAST_START"));
+            var last = Profile.FromKey(models, shared, ui.Get("LAST_START"));
             var info = last != null ? L.F("Последний запущенный режим: {0}.", last.Title) : L.T("Сервер ещё не запускался из этой версии — режим для автозапуска появится после первого запуска.");
             bool stale = false;
             try { stale = Autostart.Stale; } catch { }
@@ -1691,7 +1728,7 @@ namespace QwenStudio
                 if (exe == null) { Error(L.T("В архиве не нашёлся llama-server.exe.")); return; }
                 UpdProgress.Text = L.F("Готово: {0}", exe);
                 srv.Emit(L.F("llama.cpp b{0} установлен в {1}", r.Build, exe), LogKind.Good);
-                if (Ask(L.F("Сделать b{0} основным сервером?\n\nСейчас: {1}\nБудет: {2}\n\nВернуть можно в «Сервер и модели». Применится при следующем запуске.", r.Build, cfg.Env.Get("SERVER_EXE"), exe)))
+                if (Ask(L.F("Сделать b{0} основным сервером?\n\nСейчас: {1}\nБудет: {2}\n\nВернуть можно в «Сервер и пути». Применится при следующем запуске.", r.Build, cfg.Env.Get("SERVER_EXE"), exe)))
                 {
                     srv.Emit($"SERVER_EXE: {cfg.Env.Get("SERVER_EXE")} → {exe}");
                     cfg.Env.Set("SERVER_EXE", exe);
@@ -1747,6 +1784,8 @@ namespace QwenStudio
         {
             var keep = selected?.Id;
             LoadProfiles();
+            ShowModels();
+            FillModels();
             Select(profiles.FirstOrDefault(p => p.Id == keep));
             srv.Emit(L.F("Профили перечитаны: {0}.", profiles.Count));
         }

@@ -55,6 +55,11 @@
         <GridLength x:Key="ColGapL">24</GridLength>
         <GridLength x:Key="KeyColumn">72</GridLength>
         <GridLength x:Key="FieldColumn">160</GridLength>
+        <GridLength x:Key="ListColumn">224</GridLength>
+        <sys:Double x:Key="NumberField">96</sys:Double>
+        <Thickness x:Key="PopupGap">0,4,0,16</Thickness>
+        <Thickness x:Key="RowPad">12,8</Thickness>
+        <DropShadowEffect x:Key="PopupShadow" BlurRadius="16" ShadowDepth="4" Direction="270" Opacity="0.35" Color="Black"/>
         <sys:Double x:Key="ContentMaxWidth">880</sys:Double>
         <sys:Double x:Key="DotSize">8</sys:Double>
         <sys:Double x:Key="LogoSize">20</sys:Double>
@@ -318,13 +323,13 @@
         </Style>
 
         <!-- profile card -->
-        <Style x:Key="ProfileCard" TargetType="RadioButton">
+        <Style x:Key="ProfileCard" TargetType="ToggleButton">
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
             <Setter Property="Margin" Value="{StaticResource GapBelowS}"/>
             <Setter Property="Template">
                 <Setter.Value>
-                    <ControlTemplate TargetType="RadioButton">
+                    <ControlTemplate TargetType="ToggleButton">
                         <Border x:Name="b" Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Line}" BorderThickness="1"
                                 CornerRadius="{StaticResource RCard}" Padding="12">
                             <ContentPresenter/>
@@ -339,6 +344,29 @@
                             </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
                                 <Setter TargetName="b" Property="Opacity" Value="0.5"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- a row in a popup list: no border, fill only on hover and for the picked one -->
+        <Style x:Key="MenuRow" TargetType="ToggleButton">
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border x:Name="b" Background="Transparent" CornerRadius="{StaticResource RControl}" Padding="{StaticResource RowPad}">
+                            <ContentPresenter/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="b" Property="Background" Value="{DynamicResource Surface2}"/>
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="b" Property="Background" Value="{DynamicResource AccentSoft}"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>

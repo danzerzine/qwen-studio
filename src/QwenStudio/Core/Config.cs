@@ -18,6 +18,7 @@ namespace QwenStudio.Core
         public static string State => Path.Combine(Logs, "state.json");
         public static string ServerConfig => Path.Combine(Base, "server_config.env");
         public static string Profiles => Path.Combine(Base, "profiles.json");
+        public static string Models => Path.Combine(Base, "models.json");
         public static string LocalBin => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "bin");
         public static string LmsExe => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".cache", "lm-studio", "bin", "lms.exe");
         public static string OpencodeDesktop => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "@opencode-aidesktop", "OpenCode.exe");
@@ -129,40 +130,34 @@ namespace QwenStudio.Core
         public string Alias { get { int i = Args.IndexOf("--alias"); return i >= 0 && i + 1 < Args.Count ? Args[i + 1].Split(',')[0].Trim() : null; } }
         public int Slots { get { int i = Args.IndexOf("-np"); return i >= 0 && i + 1 < Args.Count && int.TryParse(Args[i + 1], out var n) ? n : 1; } }
 
-        /// <summary>Which model a launch variant runs on: "main", "old" (FALLBACK_* paths) or "uncensored" (UNCENSORED_MODEL_PATH).</summary>
-        public string Slot { get; private set; } = MainSlot;
-        public const string MainSlot = "main", OldSlot = "old", UncensoredSlot = "uncensored";
-        /// <summary>Slot from a stored string; anything unknown is the main model.</summary>
-        public static string ParseSlot(string s) => s is OldSlot or UncensoredSlot ? s : MainSlot;
-        /// <summary>server_config.env key with the model file of a slot.</summary>
-        public static string ModelKeyOf(string slot) => slot switch { OldSlot => "FALLBACK_MODEL_PATH", UncensoredSlot => "UNCENSORED_MODEL_PATH", _ => "MODEL_PATH" };
-        /// <summary>" · запасная модель" / " · без цензуры" after a mode name; empty for the main model.</summary>
-        public static string SlotSuffix(string slot) => slot switch { OldSlot => L.T(" · запасная модель"), UncensoredSlot => L.T(" · без цензуры"), _ => "" };
+        /// <summary>Id of the model (models.json) a launch variant runs on.</summary>
+        public string Slot { get; private set; } = ModelDef.Main;
+        /// <summary>Name of that model, for titles.</summary>
+        public string ModelName { get; private set; }
 
-        /// <summary>True for the variant that runs on the fallback model (FALLBACK_* paths).</summary>
-        public bool Old => Slot == OldSlot;
+        /// <summary>The variant runs on the model migrated from the old «Запасная» switch (stats keep their "old" flag).</summary>
+        public bool Old => Slot == ModelDef.OldId;
         /// <summary>Launch variant: the vision projector is loaded.</summary>
         public bool Sees { get; private set; }
         /// <summary>Launch variant: reasoning is on.</summary>
         public bool Thinks { get; private set; } = true;
 
+        /// <summary>"128K", or "4 × 8K" for several slots: what a mode without its own badge shows.</summary>
+        public string AutoBadge => Slots > 1 ? $"{Slots} × {Ctx / Slots / 1024}K" : $"{Ctx / 1024}K";
+
         /// <summary>
-        /// What Start launches: this mode on the chosen model with the two toggles applied.
-        /// Fallback model (FALLBACK_* paths, usually an older build and weights): no MTP head, at most 96K context and no prompt cache.
-        /// Uncensored model — a fine-tune of the main model (same architecture, MTP head, server and flags), only the weights differ.
+        /// What Start launches: this mode on the given model with the two toggles applied. The model brings its file and,
+        /// when set, its own server and vision projector; otherwise the mode's (SERVER_EXE, MMPROJ_PATH).
         /// Vision off drops --mmproj; vision with MTP turns the prompt cache off (the way «Зрение» was measured).
         /// Thinking off replaces the mode's --reasoning* flags with --reasoning off.
         /// </summary>
-        public Profile Variant(string slot, bool vision, bool think)
+        public Profile Variant(ModelDef m, bool vision, bool think)
         {
-            slot = ParseSlot(slot);
-            bool old = slot == OldSlot;
             bool sees = vision && !string.IsNullOrEmpty(Mmproj);
             var args = new List<string>();
             for (int i = 0; i < Args.Count; i++)
             {
                 var a = Args[i];
-                if (old && a.StartsWith("--spec-")) { i++; continue; }                 // flag + value
                 if (a.StartsWith("--reasoning") && i + 1 < Args.Count)
                 {
                     if (think) { args.Add(a); args.Add(a == "--reasoning" && Args[i + 1] == "off" ? "on" : Args[i + 1]); }
@@ -171,30 +166,41 @@ namespace QwenStudio.Core
                 args.Add(a);
             }
             if (!think) args.AddRange(new[] { "--reasoning", "off" });
-            if ((old || sees && args.Contains("draft-mtp")) && !args.Contains("--no-cache-prompt")) args.Add("--no-cache-prompt");
-            int ctx = old ? Math.Min(Ctx, 98304) : Ctx;
-            var parts = (Badge ?? "").Split('·').Select(s => s.Trim())
-                .Where(s => s != "" && s != "картинки" && s != "зрение" && !(old && s == "MTP"))
-                .Select(s => s == $"{Ctx / 1024}K" ? $"{ctx / 1024}K" : s).ToList();
+            if (sees && args.Contains("draft-mtp") && !args.Contains("--no-cache-prompt")) args.Add("--no-cache-prompt");
+            var parts = (string.IsNullOrWhiteSpace(Badge) ? AutoBadge : Badge).Split('·').Select(s => s.Trim())
+                .Where(s => s != "" && s != "картинки" && s != "зрение").ToList();
             if (sees) parts.Add(L.T("зрение"));
             if (!think) parts.Add(L.T("без размышлений"));
             return new Profile
             {
                 Id = Id, Name = Name, Description = Description, Badge = string.Join(" · ", parts),
-                Server = old ? "FALLBACK_SERVER_EXE" : Server,
-                Model = slot == MainSlot ? Model : ModelKeyOf(slot),
-                Mmproj = sees ? Mmproj : null, VisionByDefault = VisionByDefault, Ctx = ctx, Args = args,
-                Slot = slot, Sees = sees, Thinks = think,
+                Server = string.IsNullOrWhiteSpace(m?.Server) ? Server : m.Server,
+                Model = m?.Model ?? Model,
+                Mmproj = !sees ? null : string.IsNullOrWhiteSpace(m?.Mmproj) ? Mmproj : m.Mmproj,
+                VisionByDefault = VisionByDefault, Ctx = Ctx, Args = args,
+                Slot = m?.Id ?? ModelDef.Main, ModelName = m?.Name, Sees = sees, Thinks = think,
             };
         }
 
+        /// <summary>This mode as the old «Запасная» switch ran it: no --spec-* (no MTP head), at most 96K context, no prompt cache.</summary>
+        public Profile AsFallback()
+        {
+            var args = new List<string>();
+            for (int i = 0; i < Args.Count; i++)
+                if (Args[i].StartsWith("--spec-")) i++; else args.Add(Args[i]);   // flag + value
+            if (!args.Contains("--no-cache-prompt")) args.Add("--no-cache-prompt");
+            return new Profile { Id = Id, Name = Name, Description = Description, Server = Server, Model = Model, Mmproj = Mmproj,
+                                 VisionByDefault = VisionByDefault, Ctx = Math.Min(Ctx, 98304), Args = args };
+        }
+
         /// <summary>For the running line: the badge next to it already lists vision and thinking.</summary>
-        public string ModelTitle => L.T(Name) + SlotSuffix(Slot);
-        public string Title => L.T(Name) + (Sees ? L.T(" · зрение") : "") + (Thinks ? "" : L.T(" · без размышлений")) + SlotSuffix(Slot);
+        public string ModelTitle => L.T(Name) + ModelSuffix;
+        public string Title => L.T(Name) + (Sees ? L.T(" · зрение") : "") + (Thinks ? "" : L.T(" · без размышлений")) + ModelSuffix;
+        string ModelSuffix => string.IsNullOrEmpty(ModelName) ? "" : " · " + ModelName;
         /// <summary>For the start button: the toggles are right above it.</summary>
         public string ShortTitle => L.T(Name);  // for the start button; the model is on the switch above, the full Title in its tooltip
 
-        /// <summary>"chat|main|vision|nothink" (or chat|old|…, chat|uncensored|…): what ran last, for autostart.</summary>
+        /// <summary>"chat|main|vision|nothink" (chat|&lt;model id&gt;|…): what ran last, for autostart.</summary>
         public string Key => $"{Id}|{Slot}|{(Sees ? "vision" : "")}|{(Thinks ? "" : "nothink")}";
 
         /// <summary>Modes that were separate cards before the toggles: id → (mode, vision, thinking).</summary>
@@ -209,27 +215,30 @@ namespace QwenStudio.Core
         public static string BaseId(string id) => id != null && legacy.TryGetValue(id, out var l) ? l.id : id;
 
         /// <summary>
-        /// A launch variant by id; toggles not given come from the legacy card the id names, else from the mode's defaults.
-        /// Null when the mode is gone from profiles.json.
+        /// A launch variant: mode id on model id (null = the first model); toggles not given come from the legacy card the id names,
+        /// else from the mode's defaults. Null when the model or the mode is gone.
         /// </summary>
-        public static Profile Resolve(IList<Profile> all, string id, string slot, bool? vision = null, bool? think = null)
+        public static Profile Resolve(IList<ModelDef> models, IList<Profile> shared, string id, string slot, bool? vision = null, bool? think = null)
         {
+            var m = slot == null ? models.FirstOrDefault() : models.FirstOrDefault(x => x.Id == slot);
+            if (m == null) return null;
+            var all = m.Profiles ?? shared;
             var p = all.FirstOrDefault(x => x.Id == id);
             if (p == null && id != null && legacy.TryGetValue(id, out var l))
             {
                 p = all.FirstOrDefault(x => x.Id == l.id);
                 vision ??= l.vision; think ??= l.think;
             }
-            return p?.Variant(slot, vision ?? p.VisionByDefault, think ?? p.ThinksByDefault);
+            return p?.Variant(m, vision ?? p.VisionByDefault, think ?? p.ThinksByDefault);
         }
 
         /// <summary>Parses <see cref="Key"/>; also the older "chat|old" form.</summary>
-        public static Profile FromKey(IList<Profile> all, string key)
+        public static Profile FromKey(IList<ModelDef> models, IList<Profile> shared, string key)
         {
             var k = (key ?? "").Split('|');
             if (k[0] == "") return null;
             bool? vision = k.Length > 2 ? k[2] == "vision" : null, think = k.Length > 3 ? k[3] != "nothink" : null;
-            return Resolve(all, k[0], k.Length > 1 ? k[1] : null, vision, think);
+            return Resolve(models, shared, k[0], k.Length > 1 && k[1] != "" ? k[1] : null, vision, think);
         }
 
         public static List<Profile> LoadAll()
@@ -240,6 +249,89 @@ namespace QwenStudio.Core
         }
 
         sealed class ProfilesFile { public List<Profile> Profiles { get; set; } }
+
+        /// <summary>Args as one line for an editor; an argument with a space goes in quotes.</summary>
+        public static string ArgsText(IEnumerable<string> args) => string.Join(" ", args.Select(a => a.Contains(' ') ? $"\"{a}\"" : a));
+        /// <summary>The editor's line back into args: words, or "quoted words".</summary>
+        public static List<string> ParseArgs(string text) =>
+            System.Text.RegularExpressions.Regex.Matches(text ?? "", "\"[^\"]*\"|\\S+").Select(m => m.Value.Trim('"')).ToList();
+    }
+
+    /// <summary>
+    /// A model in models.json: a GGUF file with a name and a short label, optionally its own server build and vision projector,
+    /// and its own modes, or the shared modes of profiles.json.
+    /// </summary>
+    public sealed class ModelDef
+    {
+        public string Id { get; set; }
+        public string Name { get; set; }
+        /// <summary>Short chip in the model list: «запасная», «без цензуры», «тест».</summary>
+        public string Label { get; set; }
+        /// <summary>GGUF file, absolute or relative to the project folder.</summary>
+        public string Model { get; set; }
+        /// <summary>llama-server.exe; empty = SERVER_EXE (and that empty = the newest llama-bNNNN folder).</summary>
+        public string Server { get; set; }
+        /// <summary>Vision projector; empty = MMPROJ_PATH.</summary>
+        public string Mmproj { get; set; }
+        /// <summary>The model's own modes; null = the shared modes of profiles.json.</summary>
+        public List<Profile> Profiles { get; set; }
+
+        /// <summary>Ids the migration gives the three former switch positions; stats and state files still use them.</summary>
+        public const string Main = "main", OldId = "old", UncensoredId = "uncensored";
+
+        public ModelDef Clone() => new()
+        {
+            Id = Id, Name = Name, Label = Label, Model = Model, Server = Server, Mmproj = Mmproj,
+            Profiles = Profiles?.Select(p => new Profile { Id = p.Id, Name = p.Name, Badge = p.Badge, Description = p.Description, Server = p.Server,
+                                                            Model = p.Model, Mmproj = p.Mmproj, VisionByDefault = p.VisionByDefault, Ctx = p.Ctx, Args = p.Args.ToList() }).ToList(),
+        };
+
+        static readonly JsonSerializerOptions read = new() { PropertyNameCaseInsensitive = true, ReadCommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true };
+        static readonly JsonSerializerOptions write = new()
+        {
+            WriteIndented = true, DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+            Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,   // Cyrillic stays readable in Notepad
+        };
+
+        /// <summary>
+        /// models.json; on the first run of this version it is made from server_config.env: MODEL_PATH, and FALLBACK_* and
+        /// UNCENSORED_MODEL_PATH when set (the fallback gets the shared modes as the old switch ran them).
+        /// </summary>
+        public static List<ModelDef> LoadAll(EnvFile env, IList<Profile> shared)
+        {
+            if (File.Exists(Paths.Models))
+                return JsonSerializer.Deserialize<ModelsFile>(File.ReadAllText(Paths.Models), read)?.Models?.Where(m => !string.IsNullOrEmpty(m.Id)).ToList() ?? new();
+            string main = env.Get("MODEL_PATH"), old = env.Get("FALLBACK_MODEL_PATH"), unc = env.Get("UNCENSORED_MODEL_PATH");
+            var list = new List<ModelDef> { new() { Id = Main, Name = NameOf(main), Model = main } };
+            if (old != "") list.Add(new() { Id = OldId, Name = NameOf(old), Label = "запасная", Model = old, Server = env.Get("FALLBACK_SERVER_EXE"),
+                                            Profiles = shared.Select(p => p.AsFallback()).ToList() });
+            if (unc != "") list.Add(new() { Id = UncensoredId, Name = NameOf(unc), Label = "без цензуры", Model = unc });
+            SaveAll(list);
+            return list;
+        }
+
+        public static string NameOf(string path) => string.IsNullOrWhiteSpace(path) ? L.T("Модель") : Path.GetFileNameWithoutExtension(path);
+
+        /// <summary>Writes models.json whole through a temp file, like server_config.env.</summary>
+        public static void SaveAll(IEnumerable<ModelDef> models)
+        {
+            static string N(string s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
+            var doc = new
+            {
+                _comment = "Модели для списка «Модель». model — файл GGUF; server и mmproj — свои llama-server.exe и модуль зрения (пусто — SERVER_EXE и MMPROJ_PATH из server_config.env); profiles — свои режимы (нет — общие режимы из profiles.json). Удобнее править в «Настройки → Модели».",
+                models = models.Select(m => new
+                {
+                    id = m.Id, name = N(m.Name), label = N(m.Label), model = N(m.Model), server = N(m.Server), mmproj = N(m.Mmproj),
+                    profiles = m.Profiles?.Select(p => new { id = p.Id, name = p.Name, badge = N(p.Badge), description = N(p.Description), mmproj = N(p.Mmproj),
+                                                             vision = p.VisionByDefault ? true : (bool?)null, ctx = p.Ctx, args = p.Args }),
+                }),
+            };
+            var tmp = Paths.Models + ".tmp";
+            File.WriteAllText(tmp, JsonSerializer.Serialize(doc, write), new UTF8Encoding(false));
+            if (File.Exists(Paths.Models)) File.Replace(tmp, Paths.Models, null); else File.Move(tmp, Paths.Models);
+        }
+
+        sealed class ModelsFile { public List<ModelDef> Models { get; set; } }
     }
 
     public sealed class Settings
@@ -263,10 +355,14 @@ namespace QwenStudio.Core
             return ips.Contains(cfg) ? cfg : ips.FirstOrDefault() ?? (cfg == "" ? "127.0.0.1" : cfg);
         }
 
-        /// <summary>The profile's server; the fallback slot falls back to SERVER_EXE, and that to the newest llama-bNNNN folder.</summary>
-        public string ServerExe(Profile p) => Paths.Resolve(Env.Get(p.Server, Env.Get("SERVER_EXE", Paths.NewestLlama())));
-        public string ModelFile(Profile p) => Paths.Resolve(Env.Get(p.Model));
-        public string MmprojFile(Profile p) => string.IsNullOrEmpty(p.Mmproj) ? null : Paths.Resolve(Env.Get(p.Mmproj));
+        /// <summary>A path from models.json as is; a server_config.env key (MODEL_PATH, MMPROJ_PATH…) as its value; resolved to a full path.</summary>
+        public string PathOf(string pathOrKey) => Paths.Resolve(Raw(pathOrKey));
+        string Raw(string s) => System.Text.RegularExpressions.Regex.IsMatch(s ?? "", "^[A-Z][A-Z0-9_]*$") ? Env.Get(s) : s ?? "";
+
+        /// <summary>The variant's server; empty falls back to SERVER_EXE, and that to the newest llama-bNNNN folder.</summary>
+        public string ServerExe(Profile p) { var s = Raw(p.Server); return Paths.Resolve(s != "" ? s : Env.Get("SERVER_EXE", Paths.NewestLlama())); }
+        public string ModelFile(Profile p) => PathOf(p.Model);
+        public string MmprojFile(Profile p) => string.IsNullOrEmpty(p.Mmproj) ? null : PathOf(p.Mmproj);
 
         public static string NewApiKey() => "qwen-" + Convert.ToHexString(RandomNumberGenerator.GetBytes(20)).ToLowerInvariant();
     }

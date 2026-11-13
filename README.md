@@ -32,9 +32,9 @@ Studio вырос вокруг Qwen3.8-27B на видеокарте с 16 ГБ,
 - **Режимы одной кнопкой.** Агент, чат и параллельные запросы, а под ними тумблеры «Зрение» и
   «Размышления». Режим — это набор аргументов llama-server в `profiles.json`. Переключение перезапускает
   сервер. Если идёт запрос, Studio сначала спросит.
-- **Основная, запасная и модель без цензуры.** Любой режим можно запустить на второй модели: например,
-  на прошлой проверенной версии, если новая ведёт себя странно. Третий слот — дообученная версия основной
-  модели без цензуры.
+- **Сколько угодно моделей.** Модели добавляются в «Настройки → Модели»: название, короткая подпись,
+  файл GGUF, при желании своя сборка llama.cpp, свой модуль зрения и свои режимы с аргументами запуска.
+  На главном экране одна карточка с текущей моделью; список остальных открывается по клику.
 - **Русский и английский интерфейс.** Язык переключается в «Настройки → Язык» без перезапуска.
 - **Видно, что происходит.** Скорость генерации и промпта, занятые слоты, память, загрузка, питание и
   температура видеокарты. Живой график за 5 минут, история за 24 часа и статистика по дням.
@@ -112,13 +112,24 @@ logs\studio\           журналы сервера, статистика, на
 настройки применяет кнопка «Применить изменения». Если у вас `profiles.json` из версии 1.2 с отдельными
 режимами «Без размышлений» и «Зрение», возьмите новый файл из архива и перенесите в него свои правки.
 
-Переключатель **Основная / Запасная** запускает тот же режим на `FALLBACK_MODEL_PATH` (и
-`FALLBACK_SERVER_EXE`, если он задан). Для запасной модели Studio убирает аргументы `--spec-*`,
-ограничивает контекст 96K и выключает кэш промпта. Так проще откатиться на старую модель или сборку.
+### Модели
 
-Кнопка **Без цензуры** запускает тот же режим на `UNCENSORED_MODEL_PATH`. Это должна быть дообученная
-версия основной модели той же архитектуры: сервер, MTP и аргументы остаются как у основной, меняются
-только веса. Пока путь не задан, кнопка неактивна.
+Карточка **Модель** над режимами показывает текущую модель. Клик открывает список; выбор модели не
+перезапускает сервер, а меняет главную кнопку на «Переключить на …». Внизу списка — ссылка в
+«Настройки → Модели».
+
+В «Настройки → Модели» у каждой модели есть:
+
+- **Название** и **Подпись** — короткая метка в списке («запасная», «тест»).
+- **Файл модели** (GGUF), **Сервер llama.cpp** и **Модуль зрения**. Пустые сервер и модуль зрения берутся
+  общие, из «Сервер и пути».
+- **Свои режимы для этой модели.** Без них модель запускается в общих режимах из `profiles.json`. С ними
+  у каждого режима свои название, контекст и аргументы запуска; `-m`, `-c`, `--host`, `--port`, `--mmproj`
+  и API-ключ Studio добавляет сама.
+
+Список хранится в `models.json` рядом с `server_config.env`. При первом запуске версии 1.5 Studio сама
+создаёт его из `MODEL_PATH`, `FALLBACK_MODEL_PATH` и `UNCENSORED_MODEL_PATH`. Запасная модель получает
+свои режимы: без `--spec-*`, с контекстом до 96K и без кэша промпта, как раньше.
 
 Значения по умолчанию (`-ctk/-ctv q4_0`, `-ngl 999`, `--fit off`) рассчитаны на модель ~27B в Q3/IQ4
 на карте с 16 ГБ. Для другой связки подберите `ctx`, тип KV-кэша и `-np`. Если модель и сборка
@@ -182,8 +193,7 @@ ComfyUI выгрузить модели. Во время генерации Stud
 | `HOST`, `PORT` | `127.0.0.1` — только этот ПК, `0.0.0.0` — и локальная сеть; порт сервера |
 | `WEBUI_PORT` | порт Open WebUI |
 | `SERVER_EXE`, `MODEL_PATH` | llama-server и модель; пустой `SERVER_EXE` — самая свежая `llama-bNNNN\` |
-| `FALLBACK_SERVER_EXE`, `FALLBACK_MODEL_PATH` | запасная сборка и модель |
-| `UNCENSORED_MODEL_PATH` | модель без цензуры (дообученная основная) |
+| `FALLBACK_SERVER_EXE`, `FALLBACK_MODEL_PATH`, `UNCENSORED_MODEL_PATH` | читаются один раз, при переносе в `models.json` (версии до 1.5) |
 | `MMPROJ_PATH` | модуль зрения для тумблера «Зрение» |
 | `COMFYUI_DIR`, `COMFYUI_ARGS` | ComfyUI и его дополнительные аргументы |
 | `POWER_LIMIT_W` | лимит мощности видеокарты для кнопки в «Обслуживании»; пусто — кнопки нет |
@@ -249,8 +259,9 @@ around Qwen3.8-27B on a 16 GB graphics card, and the default modes are tuned for
 - **One-click modes.** Agent, chat and parallel requests, with *Зрение* (Vision) and *Размышления*
   (Thinking) toggles under them. A mode is a set of llama-server arguments in `profiles.json`. Switching
   modes restarts the server. If a request is in progress, Studio asks first.
-- **Main, fallback and uncensored model.** Any mode can run on a second model: for example, the previous
-  proven version when a new one misbehaves. A third slot holds an uncensored fine-tune of the main model.
+- **Any number of models.** Add models in *Settings → Модели* (Models): a name, a short label, the GGUF
+  file, and optionally its own llama.cpp build, vision projector and modes with their own launch arguments.
+  The main screen shows one card with the current model; the others open in a list on click.
 - **English or Russian interface.** Switch the language in *Settings → Language*; no restart needed.
 - **See what is going on.** Generation and prompt speed, busy slots, and GPU memory, load, power and
   temperature. A live 5-minute chart, 24-hour history and daily statistics.
@@ -330,13 +341,24 @@ Studio remembers the toggles for each mode separately. While the server is runni
 separate *Без размышлений* (No thinking) and *Зрение* (Vision) modes, take the new file from the archive and
 move your edits into it.
 
-The **Основная / Запасная** (Main / Fallback) switch runs the same mode on `FALLBACK_MODEL_PATH` (and
-`FALLBACK_SERVER_EXE`, if set). For the fallback model Studio drops `--spec-*` arguments, caps the context
-at 96K and turns off the prompt cache. This makes it easy to roll back to an older model or build.
+### Models
 
-The **Uncensored** button runs the same mode on `UNCENSORED_MODEL_PATH`. It should be a fine-tune of the
-main model with the same architecture: the server, MTP and arguments stay as for the main model, only the
-weights change. The button is disabled until the path is set.
+The **Модель** (Model) card above the modes shows the current model. A click opens the list; picking a
+model does not restart the server, it turns the main button into *Переключить на …* (Switch to …). The
+link at the bottom of the list leads to *Settings → Модели*.
+
+In *Settings → Модели* each model has:
+
+- **Name** and **Label**, a short tag in the list (fallback, test).
+- **Model file** (GGUF), **llama.cpp server** and **Vision projector**. An empty server or projector means
+  the shared one from *Сервер и пути* (Server and paths).
+- **Own modes for this model.** Without them the model runs in the shared modes from `profiles.json`. With
+  them each mode has its own name, context and launch arguments; Studio adds `-m`, `-c`, `--host`,
+  `--port`, `--mmproj` and the API key itself.
+
+The list lives in `models.json` next to `server_config.env`. On the first start of version 1.5 Studio
+creates it from `MODEL_PATH`, `FALLBACK_MODEL_PATH` and `UNCENSORED_MODEL_PATH`. The fallback model gets
+its own modes: no `--spec-*`, context up to 96K and no prompt cache, as before.
 
 The defaults (`-ctk/-ctv q4_0`, `-ngl 999`, `--fit off`) are sized for a ~27B model in Q3/IQ4 on a 16 GB
 card. For another setup, tune `ctx`, the KV cache type and `-np`. If your model and llama.cpp build support
@@ -399,8 +421,7 @@ All settings live in `server_config.env`. The full list with comments is in
 | `HOST`, `PORT` | `127.0.0.1` for this PC only, `0.0.0.0` for the local network too; server port |
 | `WEBUI_PORT` | Open WebUI port |
 | `SERVER_EXE`, `MODEL_PATH` | llama-server and the model; an empty `SERVER_EXE` means the newest `llama-bNNNN\` |
-| `FALLBACK_SERVER_EXE`, `FALLBACK_MODEL_PATH` | fallback build and model |
-| `UNCENSORED_MODEL_PATH` | uncensored model (a fine-tune of the main one) |
+| `FALLBACK_SERVER_EXE`, `FALLBACK_MODEL_PATH`, `UNCENSORED_MODEL_PATH` | read once, when moving to `models.json` (before 1.5) |
 | `MMPROJ_PATH` | vision projector for the *Зрение* (Vision) toggle |
 | `COMFYUI_DIR`, `COMFYUI_ARGS` | ComfyUI folder and extra arguments |
 | `POWER_LIMIT_W` | GPU power limit for the button in Maintenance; empty hides the button |

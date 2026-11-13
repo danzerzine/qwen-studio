@@ -81,7 +81,7 @@ namespace QwenStudio.Core
         public async Task<(bool ok, string message)> Start()
         {
             var (py, main) = Find();
-            if (main == null) return (false, L.T("Не найден ComfyUI: укажите папку в «Настройки → Сервер и модели» (COMFYUI_DIR)."));
+            if (main == null) return (false, L.T("Не найден ComfyUI: укажите папку в «Настройки → Сервер и пути» (COMFYUI_DIR)."));
             var extra = cfg.Env.Get("COMFYUI_ARGS");
             // cmd is used only for the "> file" redirect, so ComfyUI keeps logging after Studio closes
             var psi = new ProcessStartInfo("cmd.exe")

@@ -19,7 +19,7 @@ namespace QwenStudio.Core
         [JsonPropertyName("up")] public bool Up { get; set; }
         [JsonPropertyName("profile")] public string Profile { get; set; }
         [JsonPropertyName("old")] public bool Old { get; set; }
-        /// <summary>"uncensored" for the third model; absent for the main and old ones (they have "old").</summary>
+        /// <summary>Id of the model (models.json); absent for the first model and the old fallback one (it has "old").</summary>
         [JsonPropertyName("model"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string Model { get; set; }
         [JsonPropertyName("req")] public int Req { get; set; }
         [JsonPropertyName("gen")] public long Gen { get; set; }
@@ -40,7 +40,7 @@ namespace QwenStudio.Core
         [JsonPropertyName("event")] public string Event { get; set; }
         [JsonPropertyName("profile")] public string Profile { get; set; }
         [JsonPropertyName("old")] public bool Old { get; set; }
-        /// <summary>"uncensored" for the third model; absent for the main and old ones (they have "old").</summary>
+        /// <summary>Id of the model (models.json); absent for the first model and the old fallback one (it has "old").</summary>
         [JsonPropertyName("model"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string Model { get; set; }
         [JsonPropertyName("build")] public string Build { get; set; }
         [JsonPropertyName("driver")] public string Driver { get; set; }
@@ -110,13 +110,13 @@ namespace QwenStudio.Core
         static DateTime Minute(DateTime t) => new(t.Year, t.Month, t.Day, t.Hour, t.Minute, 0, t.Kind);
 
         /// <summary>Reads the files and fills gaps from the server logs. Call once, off the UI thread.</summary>
-        public void Load(string fallbackModelName, string uncensoredModelName, string liveLog)
+        public void Load(IList<(string id, string file)> models, string liveLog)
         {
             foreach (var e in ReadJsonl<SessionEvent>(SessionsFile)) Events.Add(e);
             var all = ReadJsonl<MinuteStat>(StatsFile);
             var now = DateTime.Now;
             var from = all.Count > 0 ? all[^1].At.AddMinutes(1) : now.AddDays(-7);
-            var filled = Backfill(from, Minute(now), fallbackModelName, uncensoredModelName, liveLog);
+            var filled = Backfill(from, Minute(now), models, liveLog);
             if (filled.Count > 0)
             {
                 Append(StatsFile, filled);
@@ -201,10 +201,10 @@ namespace QwenStudio.Core
         IEnumerable<MinuteStat> Minutes => recent.Concat(open.Values);
 
         /// <summary>Toggles are not modes: minutes of the former «Без размышлений» and «Зрение» cards count as «Чат».</summary>
-        public static string ModeOf(MinuteStat m) => (Profile.BaseId(m.Profile) ?? "?") + (m.Old ? "|old" : m.Model == Profile.UncensoredSlot ? "|uncensored" : "");
+        public static string ModeOf(MinuteStat m) => (Profile.BaseId(m.Profile) ?? "?") + (m.Old ? "|" + ModelDef.OldId : m.Model != null ? "|" + m.Model : "");
 
         /// <summary>What goes into "model": only the slot the "old" flag cannot say.</summary>
-        static string ExtraSlot(Profile p) => p.Slot == Profile.UncensoredSlot ? p.Slot : null;
+        static string ExtraSlot(Profile p) => p.Slot is ModelDef.Main or ModelDef.OldId ? null : p.Slot;
 
         void Fold(MinuteStat m)
         {
@@ -272,7 +272,7 @@ namespace QwenStudio.Core
         /// Rebuilds minutes in [from, to) from Studio's server logs: what the server served and when it was up.
         /// A finished log counts as up from its first to its last line (idle time after that is unknown).
         /// </summary>
-        static List<MinuteStat> Backfill(DateTime from, DateTime to, string fallbackModelName, string uncensoredModelName, string liveLog)
+        static List<MinuteStat> Backfill(DateTime from, DateTime to, IList<(string id, string file)> models, string liveLog)
         {
             var minutes = new SortedDictionary<DateTime, MinuteStat>();
             if (from >= to) return new();
@@ -296,8 +296,9 @@ namespace QwenStudio.Core
                         var m = rxStamp.Match(l);
                         if (!m.Success) continue;
                         var at = start + new TimeSpan(0, 0, int.Parse(m.Groups[1].Value), int.Parse(m.Groups[2].Value), int.Parse(m.Groups[3].Value));
-                        if (!string.IsNullOrEmpty(fallbackModelName) && l.Contains(fallbackModelName)) old = true;
-                        if (!string.IsNullOrEmpty(uncensoredModelName) && l.Contains(uncensoredModelName)) model = Profile.UncensoredSlot;
+                        if (!old && model == null)   // longest file name first: "x-tuned.gguf" is not "x.gguf"
+                            foreach (var (id, file) in models.Where(x => !string.IsNullOrEmpty(x.file)).OrderByDescending(x => x.file.Length))
+                                if (l.Contains(file)) { if (id == ModelDef.OldId) old = true; else if (id != ModelDef.Main) model = id; break; }
                         Match g;
                         if ((g = rxGen.Match(l)).Success) gen = int.Parse(g.Groups[1].Value);
                         // every minute between two log lines was up — the process was alive to write the second one

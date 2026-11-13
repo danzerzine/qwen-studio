@@ -57,7 +57,8 @@ Icon sizes: `IconS` 12 (inside buttons), `IconM` 14 (icon buttons), `IconL` 16 (
 Thickness resources built from the scale: `PagePad` (24), `CardPad` (16), `HeaderPad` (24,16),
 `BodyPad` (24,0,24,24), `DividerGap` (0,16), `GapBelow` (0,0,0,12), `GapBelowS` (0,0,0,8), `CaptionGap` (0,0,0,8),
 `GapTop` (0,12,0,0), `GapTopS` (0,8,0,0), `GapLeft` / `GapLeftS` (12 / 8 left), `GapRight` / `GapRightS` (12 / 8 right),
-`SegmentPad` (4). Column gaps: `ColGapS` 8, `ColGap` 12, `ColGapL` 24.
+`SegmentPad` (4, also the inner padding of a popup card), `RowPad` (12,8 — a popup list row),
+`PopupGap` (0,4,0,16 — popup below its card, room for the shadow). Column gaps: `ColGapS` 8, `ColGap` 12, `ColGapL` 24.
 
 ## Shape and sizes
 
@@ -74,6 +75,9 @@ Thickness resources built from the scale: `PagePad` (24), `CardPad` (16), `Heade
 | `ContentMaxWidth` | 880 | full-width pages (Statistics, Settings) |
 | `KeyColumn` / `FieldColumn` | 72 / 160 | key column of the connection list / label column of settings rows |
 | `RowHeight` / `FieldRow` | 32 / 40 | table and list rows / settings rows with a control |
+| `ListColumn` | 224 | list column of a list + editor card (Settings → Модели) |
+| `NumberField` | 96 | short number input (a mode's context) |
+| `PopupShadow` | blur 16, depth 4, 0.35 | the only drop shadow: popups over the page |
 | `DotSize` / `LogoSize` | 8 / 20 | status dots / app logo |
 | `BarGap` | 1,0 | gap between chart bars |
 | `ChartBaseline` / `ChartTick` / `ChartMinBar` | 2 / 3 / 3 | idle baseline, crash tick, smallest visible bar |
@@ -107,6 +111,15 @@ Thickness resources built from the scale: `PagePad` (24), `CardPad` (16), `Heade
 - **Event row** (Overview events, journal) — `MonoText` time in `Faint`, then a `Dot` for Good / Warn / Error
   (hidden otherwise, keeps alignment), then the text.
 - **Segments** — `Surface2` track with `SegmentPad`, `RControl`; items use the `Tab` style (selected = `Surface`).
-  Used for the page tabs, model switch, chart metric switch and the live / 24-hour switch.
+  Used for the page tabs, chart metric switch and the live / 24-hour switch.
 - **Dot** — `DotSize` ellipse, `Faint` by default; colour always from a role.
 - **Hint** — `Label` that wraps, under a settings row.
+- **Model picker** (sidebar) — a `ProfileCard` toggle: `Dot` in `Good` while the server runs this model,
+  `BodyStrong` name, `Label` size (and file when the name is not the file's), chevron `IconS`. Its popup is a
+  Card with `SegmentPad`, `PopupShadow`, rows in `MenuRow` (no border; `Surface2` on hover, `AccentSoft` when
+  picked) with a `Chip` on the right (работает, or the model's label), a `Divider` and a `Link` to Settings.
+  Picking never restarts: `Primary` says «Переключить на …».
+- **List + editor card** (Settings → Модели) — `ListColumn` of `ProfileCard` radio rows and a default
+  «+ Добавить» button, `ColGap`, then the editor: settings rows, a toggle for own modes, one inner Card per
+  mode (name, `NumberField` context, `IconBtn` delete, args in `MonoText` that wraps), `DangerOutline` delete
+  and `Primary` save at the bottom.

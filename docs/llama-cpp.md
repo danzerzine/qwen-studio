@@ -73,8 +73,8 @@ Qwen Studio не содержит llama.cpp: он запускает `llama-serv
 - **Закрепить.** Укажите `SERVER_EXE`. Новые папки `llama-b*` больше не будут подхватываться сами.
 - **Откатиться.** Старые папки Studio не удаляет. Укажите в `SERVER_EXE` путь к предыдущей и перезапустите
   сервер. Лишние папки можно просто удалить, когда новая версия проверена.
-- **Держать две версии.** Режим «Запасная» использует `FALLBACK_SERVER_EXE` (если пусто — ту же сборку,
-  что и основной). Удобно: новая сборка в основном режиме, проверенная старая — в запасном.
+- **Держать две версии.** У каждой модели в «Настройки → Модели» может быть своя сборка (поле «Сервер
+  llama.cpp»; пусто — общая). Удобно: новая сборка у основной модели, проверенная старая — у запасной.
 
 ## Когда обновляться
 
@@ -164,8 +164,9 @@ then always uses that build, and *Проверить* (Check) compares the lates
 - **Pin.** Set `SERVER_EXE`. New `llama-b*` folders are no longer picked up automatically.
 - **Roll back.** Studio never deletes old folders. Point `SERVER_EXE` at the previous one and restart the
   server. Delete the extra folders yourself once the new version has proven itself.
-- **Keep two versions.** The *Запасная* (Fallback) mode uses `FALLBACK_SERVER_EXE` (empty means the same
-  build as the main mode). A handy setup: the new build in the main mode, the proven old one in Fallback.
+- **Keep two versions.** Each model in *Settings → Модели* can have its own build (the llama.cpp server
+  field; empty means the shared one). A handy setup: the new build for the main model, the proven old one
+  for a fallback model.
 
 ## When to update
 
